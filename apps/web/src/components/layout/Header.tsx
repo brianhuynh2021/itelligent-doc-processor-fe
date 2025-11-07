@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button"
 import { CommandPaletteTrigger } from "@/components/ui/CommandPalette"
-import { BarChart3, FileText, LogIn, MessageSquare } from "lucide-react"
+import { BarChart3, FileText, LogIn, MessageSquare, Shield } from "lucide-react"
 import Link from "next/link"
 import { Logo } from "./Logo"
 import { UserMenu } from "./UserMenu"
@@ -39,6 +39,13 @@ export function Header() {
                         >
                             <BarChart3 className="h-4 w-4" />
                             Dashboard
+                        </Link>
+                        <Link 
+                            href="/admin/dashboard" 
+                            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                            <Shield className="h-4 w-4" />
+                            Admin
                         </Link>
                         <UserMenu
                             user={{
