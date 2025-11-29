@@ -82,8 +82,31 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto p-6">
-        {children}
+      <main className="flex-1 overflow-hidden">
+        <div className="flex h-full flex-col">
+          <div className="flex-1 overflow-y-auto p-6">
+            {children}
+          </div>
+          <footer className="border-t bg-background/60 px-6 py-4 text-sm text-muted-foreground">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="font-medium text-foreground">Intelligent Doc Processor Admin</p>
+              <div className="flex flex-col gap-1 text-xs sm:text-sm sm:flex-row sm:items-center sm:gap-4">
+                <span>© {new Date().getFullYear()} Intelligent Doc Processor. All rights reserved.</span>
+                <div className="flex items-center gap-4">
+                  <Link href="/support" className="hover:text-foreground transition-colors">
+                    Support
+                  </Link>
+                  <Link href="/status" className="hover:text-foreground transition-colors">
+                    System Status
+                  </Link>
+                  <Link href="/admin/settings" className="hover:text-foreground transition-colors">
+                    Settings
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </footer>
+        </div>
       </main>
     </div>
   )
