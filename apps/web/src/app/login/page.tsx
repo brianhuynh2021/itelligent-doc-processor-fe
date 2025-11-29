@@ -2,23 +2,28 @@
 
 import { LoginForm } from "@/components/auth/LoginForm"
 import { AuthLayout } from "@/components/auth/AuthLayout"
+import { login, storeAuthTokens } from "@/lib/auth"
+import { useRouter } from "next/navigation"
 import { useState } from "react"
+import { toast } from "sonner"
 
 export default function LoginPage() {
+  const router = useRouter()
   const [isLoading, setIsLoading] = useState(false)
 
   const handleLogin = async (values: { email: string; password: string }) => {
     setIsLoading(true)
     try {
-      // TODO: Replace with actual API call
-      console.log("Login attempt:", values)
-      await new Promise((resolve) => setTimeout(resolve, 1500))
-      
-      // Simulate successful login
-      // router.push("/dashboard")
+      const data = await login(values)
+      storeAuthTokens(data)
+      toast.success("Signed in successfully")
+      router.push("/admin/dashboard")
     } catch (error) {
-      console.error("Login error:", error)
-      // TODO: Show error toast
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Login failed. Please try again."
+      toast.error(message)
     } finally {
       setIsLoading(false)
     }
@@ -45,4 +50,3 @@ export default function LoginPage() {
     </AuthLayout>
   )
 }
-

@@ -3,6 +3,7 @@
 import { ReactNode, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2 } from "lucide-react"
+import { AUTH_CHANGED_EVENT, hasAuthSession } from "@/lib/auth"
 
 interface ProtectedRouteProps {
   children: ReactNode
@@ -20,24 +21,24 @@ export function ProtectedRoute({
   const [isAuthenticated, setIsAuthenticated] = useState(false)
 
   useEffect(() => {
-    // TODO: Replace with actual auth check
-    // For now, this is a placeholder
-    const checkAuth = async () => {
-      // Simulate auth check
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      
-      // TODO: Replace with actual session check
-      const hasSession = false // This should check actual auth state
-      
-      setIsAuthenticated(hasSession)
+    const checkSession = () => {
+      const sessionExists = hasAuthSession()
+      setIsAuthenticated(sessionExists)
       setIsLoading(false)
 
-      if (requireAuth && !hasSession) {
-        router.push(redirectTo)
+      if (requireAuth && !sessionExists) {
+        router.replace(redirectTo)
       }
     }
 
-    checkAuth()
+    checkSession()
+    window.addEventListener("storage", checkSession)
+    window.addEventListener(AUTH_CHANGED_EVENT, checkSession)
+
+    return () => {
+      window.removeEventListener("storage", checkSession)
+      window.removeEventListener(AUTH_CHANGED_EVENT, checkSession)
+    }
   }, [requireAuth, redirectTo, router])
 
   if (isLoading) {
@@ -57,4 +58,3 @@ export function ProtectedRoute({
 
   return <>{children}</>
 }
-
