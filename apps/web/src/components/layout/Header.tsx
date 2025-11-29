@@ -1,15 +1,37 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { CommandPaletteTrigger } from "@/components/ui/CommandPalette"
 import { BarChart3, FileText, LogIn, MessageSquare, Shield } from "lucide-react"
 import Link from "next/link"
 import { Logo } from "./Logo"
 import { UserMenu } from "./UserMenu"
+import { AUTH_CHANGED_EVENT, clearAuthTokens, hasAuthSession } from "@/lib/auth"
+import { useRouter } from "next/navigation"
 
 export function Header() {
-    // TODO: Replace with actual auth state
-    const isAuthenticated = false
+    const router = useRouter()
+    const [isAuthenticated, setIsAuthenticated] = useState(false)
+
+    useEffect(() => {
+        const syncAuthState = () => setIsAuthenticated(hasAuthSession())
+
+        syncAuthState()
+        window.addEventListener("storage", syncAuthState)
+        window.addEventListener(AUTH_CHANGED_EVENT, syncAuthState)
+
+        return () => {
+            window.removeEventListener("storage", syncAuthState)
+            window.removeEventListener(AUTH_CHANGED_EVENT, syncAuthState)
+        }
+    }, [])
+
+    const handleSignOut = () => {
+        clearAuthTokens()
+        setIsAuthenticated(false)
+        router.push("/login")
+    }
 
     return (
         <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
@@ -52,7 +74,7 @@ export function Header() {
                                 name: "John Doe",
                                 email: "john@example.com",
                             }}
-                            onSignOut={() => console.log("Sign out")}
+                            onSignOut={handleSignOut}
                         />
                     </nav>
                 ) : (

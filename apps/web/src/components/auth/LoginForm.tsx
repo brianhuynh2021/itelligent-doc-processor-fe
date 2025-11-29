@@ -19,7 +19,7 @@ import Link from "next/link"
 import { Loader2, Mail, Lock, Eye, EyeOff } from "lucide-react"
 
 const loginSchema = z.object({
-  email: z.string().email("Please enter a valid email address"),
+  email: z.string().min(1, "Please enter your email or username"),
   password: z.string().min(6, "Password must be at least 6 characters"),
 })
 
@@ -72,14 +72,14 @@ export function LoginForm({
             name="email"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Email</FormLabel>
+                <FormLabel>Email or username</FormLabel>
                 <FormControl>
                   <div className="relative">
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                       {...field}
-                      type="email"
-                      placeholder="name@example.com"
+                      type="text"
+                      placeholder="you@example.com or username"
                       className="pl-10"
                       disabled={isLoading}
                     />
@@ -165,4 +165,3 @@ export function LoginForm({
     </div>
   )
 }
-
