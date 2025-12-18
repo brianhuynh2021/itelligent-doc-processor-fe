@@ -12,6 +12,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { User, Settings, LogOut, CreditCard, HelpCircle } from "lucide-react"
 import Link from "next/link"
+import type { MouseEvent } from "react"
 
 interface UserMenuProps {
   user?: {
@@ -19,16 +20,19 @@ interface UserMenuProps {
     email?: string
     avatar?: string
   }
-  onSignOut?: () => void
+  onSignOut?: (event: MouseEvent) => void
 }
 
 export function UserMenu({ user, onSignOut }: UserMenuProps) {
-  const initials = user?.name
-    ?.split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2) || "U"
+  const initials =
+    user?.name
+      ?.split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2) ||
+    user?.email?.slice(0, 2).toUpperCase() ||
+    "U"
 
   return (
     <DropdownMenu>
@@ -43,11 +47,13 @@ export function UserMenu({ user, onSignOut }: UserMenuProps) {
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-col space-y-1">
             <p className="text-sm font-medium leading-none">
-              {user?.name || "User"}
+              {user?.name || "Account"}
             </p>
-            <p className="text-xs leading-none text-muted-foreground">
-              {user?.email || "user@example.com"}
-            </p>
+            {user?.email ? (
+              <p className="text-xs leading-none text-muted-foreground">
+                {user.email}
+              </p>
+            ) : null}
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
@@ -78,7 +84,7 @@ export function UserMenu({ user, onSignOut }: UserMenuProps) {
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="cursor-pointer text-destructive focus:text-destructive"
-          onClick={onSignOut}
+          onClick={(event) => onSignOut?.(event)}
         >
           <LogOut className="mr-2 h-4 w-4" />
           <span>Log out</span>
@@ -87,4 +93,3 @@ export function UserMenu({ user, onSignOut }: UserMenuProps) {
     </DropdownMenu>
   )
 }
-
