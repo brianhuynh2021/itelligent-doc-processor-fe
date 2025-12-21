@@ -394,13 +394,13 @@ export default function DocumentsPage() {
                       </span>
                     </button>
                   ) : (
-                    <div className="flex min-w-0 items-center gap-3 rounded-md border bg-background p-3">
+                    <div className="flex w-full min-w-0 items-center gap-3 overflow-hidden rounded-md border bg-background p-3">
                       <div className="rounded-md bg-muted p-2">
                         <FileText className="h-4 w-4 text-muted-foreground" />
                       </div>
-                      <div className="min-w-0 flex-1">
+                      <div className="min-w-0 w-0 flex-1">
                         <p
-                          className="text-sm font-medium truncate"
+                          className="truncate text-sm font-medium"
                           title={selectedFile.name}
                         >
                           {selectedFile.name}
