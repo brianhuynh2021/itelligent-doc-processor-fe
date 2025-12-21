@@ -1,8 +1,9 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { FileText, RefreshCw } from "lucide-react"
+import { FileText, Loader2, RefreshCw, UploadCloud } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -22,6 +23,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
 import { EmptyState } from "@/components/ui/EmptyState"
 import { ErrorDisplay } from "@/components/ui/ErrorDisplay"
 import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton"
@@ -47,6 +57,15 @@ type DocumentItem = {
 type PaginatedDocumentsResponse = {
   items: DocumentItem[]
   total: number
+}
+
+type UploadFileResponse = {
+  file_id: string
+  filename: string
+  content_type: string
+  size: number
+  url: string
+  document_id: number
 }
 
 function getDocumentLabel(document: DocumentItem) {
@@ -83,6 +102,7 @@ function formatDateTime(value: string | null) {
 
 export default function DocumentsPage() {
   const router = useRouter()
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [documents, setDocuments] = useState<DocumentItem[]>([])
   const [total, setTotal] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -92,10 +112,31 @@ export default function DocumentsPage() {
   const [skip, setSkip] = useState(0)
   const [limit] = useState(20)
 
+  const [isUploadOpen, setIsUploadOpen] = useState(false)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [isDragActive, setIsDragActive] = useState(false)
+
   const apiBaseUrl = useMemo(() => {
     const baseUrl =
       process.env.NEXT_PUBLIC_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
     return baseUrl?.replace(/\/+$/, "") ?? ""
+  }, [])
+
+  const resetUploadState = useCallback(() => {
+    setSelectedFile(null)
+    setUploadError(null)
+    setIsUploading(false)
+    setIsDragActive(false)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
+    }
+  }, [])
+
+  const setFile = useCallback((file: File | null) => {
+    setUploadError(null)
+    setSelectedFile(file)
   }, [])
 
   const loadDocuments = useCallback(async () => {
@@ -172,6 +213,79 @@ export default function DocumentsPage() {
     }
   }, [apiBaseUrl, limit, router, skip])
 
+  const uploadDocument = useCallback(async () => {
+    if (!selectedFile) return
+
+    setIsUploading(true)
+    setUploadError(null)
+
+    const token = getAccessToken()
+    if (!token) {
+      setIsUploading(false)
+      setUploadError("You are not signed in.")
+      router.push("/login")
+      return
+    }
+
+    if (!apiBaseUrl) {
+      setIsUploading(false)
+      setUploadError(
+        "Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.",
+      )
+      return
+    }
+
+    const url = new URL("/api/v1/files/upload", apiBaseUrl)
+    const body = new FormData()
+    body.append("file", selectedFile)
+
+    try {
+      const res = await fetch(url.toString(), {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body,
+      })
+
+      if (res.status === 401) {
+        router.push("/login")
+        throw new Error("Session expired. Please sign in again.")
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const message =
+          err?.detail || err?.message || `Upload failed (${res.status}).`
+        throw new Error(message)
+      }
+
+      const data = (await res
+        .json()
+        .catch(() => null)) as UploadFileResponse | null
+
+      toast.success(
+        data?.filename ? `Uploaded ${data.filename}` : "Uploaded successfully",
+      )
+
+      setIsUploadOpen(false)
+      resetUploadState()
+      if (skip === 0) {
+        void loadDocuments()
+      } else {
+        setSkip(0)
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to upload document."
+      setUploadError(message)
+      toast.error(message)
+    } finally {
+      setIsUploading(false)
+    }
+  }, [apiBaseUrl, loadDocuments, resetUploadState, router, selectedFile, skip])
+
   useEffect(() => {
     void loadDocuments()
   }, [loadDocuments])
@@ -195,6 +309,169 @@ export default function DocumentsPage() {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          <Dialog
+            open={isUploadOpen}
+            onOpenChange={(open) => {
+              setIsUploadOpen(open)
+              if (open) resetUploadState()
+            }}
+          >
+            <DialogTrigger asChild>
+              <Button variant="outline" className="gap-2">
+                <UploadCloud className="h-4 w-4" />
+                Upload
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Upload document</DialogTitle>
+                <DialogDescription>
+                  Upload a single file (PDF, DOCX, images, CSV, TXT).
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-2">
+                <Label htmlFor="document-upload">File</Label>
+                <input
+                  id="document-upload"
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.docx,.png,.jpg,.jpeg,.csv,.txt"
+                  className="sr-only"
+                  disabled={isUploading}
+                  onChange={(e) => {
+                    setFile(e.target.files?.[0] ?? null)
+                  }}
+                />
+                <div
+                  className={[
+                    "w-full overflow-hidden rounded-md border p-4 transition-colors",
+                    selectedFile ? "bg-muted/10" : "border-dashed",
+                    isDragActive
+                      ? "border-primary bg-primary/5"
+                      : "border-muted-foreground/25",
+                  ].join(" ")}
+                  onDragEnter={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    if (!isUploading) setIsDragActive(true)
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    if (!isUploading) setIsDragActive(true)
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsDragActive(false)
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsDragActive(false)
+                    if (isUploading) return
+                    const file = e.dataTransfer.files?.[0] ?? null
+                    if (file) setFile(file)
+                  }}
+                >
+                  {!selectedFile ? (
+                    <button
+                      type="button"
+                      disabled={isUploading}
+                      className="flex w-full flex-col items-center justify-center gap-2 rounded-md py-6 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <UploadCloud className="h-6 w-6" />
+                      <span>
+                        Drop a file here or{" "}
+                        <span className="font-medium underline underline-offset-4">
+                          browse
+                        </span>
+                      </span>
+                      <span className="text-xs">
+                        PDF, DOCX, images (PNG/JPEG), CSV, TXT
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="flex min-w-0 items-center gap-3 rounded-md border bg-background p-3">
+                      <div className="rounded-md bg-muted p-2">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className="text-sm font-medium truncate"
+                          title={selectedFile.name}
+                        >
+                          {selectedFile.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {Math.max(1, Math.round(selectedFile.size / 1024))} KB
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {uploadError ? (
+                  <p className="text-sm text-destructive">{uploadError}</p>
+                ) : null}
+              </div>
+
+              <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={!selectedFile || isUploading}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Change file
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={!selectedFile || isUploading}
+                    onClick={() => resetUploadState()}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    Remove
+                  </Button>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={isUploading}
+                    onClick={() => {
+                      setIsUploadOpen(false)
+                      resetUploadState()
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={uploadDocument}
+                    disabled={!selectedFile || isUploading}
+                    className="gap-2"
+                  >
+                    {isUploading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Uploading
+                      </>
+                    ) : (
+                      "Upload"
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
           <Button variant="outline" className="gap-2" onClick={loadDocuments}>
             <RefreshCw className="h-4 w-4" />
             Refresh
