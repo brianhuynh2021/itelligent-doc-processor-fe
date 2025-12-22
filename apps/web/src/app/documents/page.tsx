@@ -35,7 +35,7 @@ import { Label } from "@/components/ui/label"
 import { EmptyState } from "@/components/ui/EmptyState"
 import { ErrorDisplay } from "@/components/ui/ErrorDisplay"
 import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton"
-import { getAccessToken } from "@/lib/auth"
+import { getAccessToken, refreshAccessToken } from "@/lib/auth"
 
 type DocumentItem = {
   id?: number | string
@@ -144,7 +144,7 @@ export default function DocumentsPage() {
     setError(null)
     setTotal(null)
 
-    const token = getAccessToken()
+    let token = getAccessToken()
     if (!token) {
       setIsLoading(false)
       setError("You are not signed in.")
@@ -165,17 +165,28 @@ export default function DocumentsPage() {
     url.searchParams.set("limit", String(limit))
 
     try {
-      const res = await fetch(url.toString(), {
+      let res = await fetch(url.toString(), {
         method: "GET",
         headers: {
           accept: "application/json",
           Authorization: `Bearer ${token}`,
         },
       })
-
-      if (res.status === 401) {
-        router.push("/login")
-        throw new Error("Session expired. Please sign in again.")
+      if (res.status === 401 || res.status === 403) {
+        const nextToken = await refreshAccessToken()
+        if (nextToken) {
+          token = nextToken
+          res = await fetch(url.toString(), {
+            method: "GET",
+            headers: {
+              accept: "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+          })
+        } else {
+          router.push("/login")
+          throw new Error("Session expired. Please sign in again.")
+        }
       }
 
       if (!res.ok) {
@@ -219,7 +230,7 @@ export default function DocumentsPage() {
     setIsUploading(true)
     setUploadError(null)
 
-    const token = getAccessToken()
+    let token = getAccessToken()
     if (!token) {
       setIsUploading(false)
       setUploadError("You are not signed in.")
@@ -240,7 +251,7 @@ export default function DocumentsPage() {
     body.append("file", selectedFile)
 
     try {
-      const res = await fetch(url.toString(), {
+      let res = await fetch(url.toString(), {
         method: "POST",
         headers: {
           accept: "application/json",
@@ -248,10 +259,22 @@ export default function DocumentsPage() {
         },
         body,
       })
-
-      if (res.status === 401) {
-        router.push("/login")
-        throw new Error("Session expired. Please sign in again.")
+      if (res.status === 401 || res.status === 403) {
+        const nextToken = await refreshAccessToken()
+        if (nextToken) {
+          token = nextToken
+          res = await fetch(url.toString(), {
+            method: "POST",
+            headers: {
+              accept: "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body,
+          })
+        } else {
+          router.push("/login")
+          throw new Error("Session expired. Please sign in again.")
+        }
       }
 
       if (!res.ok) {
@@ -268,6 +291,13 @@ export default function DocumentsPage() {
       toast.success(
         data?.filename ? `Uploaded ${data.filename}` : "Uploaded successfully",
       )
+
+      if (data?.document_id != null) {
+        setIsUploadOpen(false)
+        resetUploadState()
+        router.push(`/documents/${data.document_id}`)
+        return
+      }
 
       setIsUploadOpen(false)
       resetUploadState()
@@ -531,9 +561,27 @@ export default function DocumentsPage() {
                         document.id != null
                           ? String(document.id)
                           : `${label}-${index}`
+                      const hasId = document.id != null
 
                       return (
-                        <TableRow key={key}>
+                        <TableRow
+                          key={key}
+                          className={
+                            hasId
+                              ? "cursor-pointer transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                              : undefined
+                          }
+                          tabIndex={hasId ? 0 : -1}
+                          onKeyDown={(e) => {
+                            if (!hasId) return
+                            if (e.key !== "Enter") return
+                            router.push(`/documents/${String(document.id)}`)
+                          }}
+                          onClick={() => {
+                            if (!hasId) return
+                            router.push(`/documents/${String(document.id)}`)
+                          }}
+                        >
                           <TableCell className="font-medium">
                             <div className="flex items-center gap-3">
                               <div className="rounded-md bg-muted p-2">

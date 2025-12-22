@@ -83,6 +83,11 @@ export function getAccessToken() {
   return localStorage.getItem(ACCESS_TOKEN_KEY)
 }
 
+export function getRefreshToken() {
+  if (typeof window === "undefined") return null
+  return localStorage.getItem(REFRESH_TOKEN_KEY)
+}
+
 export function hasAuthSession() {
   return Boolean(getAccessToken())
 }
@@ -241,4 +246,42 @@ export function clearAuthTokens() {
   localStorage.removeItem(REFRESH_TOKEN_KEY)
   localStorage.removeItem(AUTH_USER_KEY)
   broadcastAuthChange()
+}
+
+export async function refreshAccessToken() {
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) return null
+  if (!API_BASE_URL) return null
+
+  const refreshUrl = new URL("/api/v1/auth/refresh", API_BASE_URL).toString()
+
+  const res = await fetch(refreshUrl, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  }).catch(() => null)
+
+  if (!res?.ok) return null
+
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+  const accessToken =
+    (typeof data.access_token === "string" && data.access_token) ||
+    (typeof data.accessToken === "string" && data.accessToken) ||
+    null
+  const newRefreshToken =
+    (typeof data.refresh_token === "string" && data.refresh_token) ||
+    (typeof data.refreshToken === "string" && data.refreshToken) ||
+    null
+
+  if (!accessToken) return null
+
+  storeAuthTokens({
+    accessToken,
+    refreshToken: newRefreshToken ?? refreshToken,
+  })
+
+  return accessToken
 }
