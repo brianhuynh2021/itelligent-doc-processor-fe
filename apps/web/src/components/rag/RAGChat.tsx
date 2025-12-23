@@ -61,6 +61,17 @@ type DocumentInDB = {
 
 const CHAT_SESSION_ID_KEY = "chat_session_id"
 const CHAT_SESSION_KEY_KEY = "chat_session_key"
+const CHAT_MODEL_KEY = "chat_model"
+const DEFAULT_CHAT_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+const CHAT_MODELS = (() => {
+  const envModels = process.env.NEXT_PUBLIC_CHAT_MODELS ?? ""
+  const parsed = envModels
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean)
+  return parsed.length ? parsed : DEFAULT_CHAT_MODELS
+})()
+const DEFAULT_CHAT_MODEL = process.env.NEXT_PUBLIC_CHAT_MODEL_DEFAULT ?? ""
 
 function extractDocumentId(metadata: Record<string, unknown>): number | null {
   const candidates = [
@@ -129,6 +140,12 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
   const [documents, setDocuments] = useState<DocumentInDB[]>([])
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(true)
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null)
+  const [selectedModel, setSelectedModel] = useState<string>("")
+
+  const modelOptions = useMemo(() => {
+    if (!selectedModel || CHAT_MODELS.includes(selectedModel)) return CHAT_MODELS
+    return [...CHAT_MODELS, selectedModel]
+  }, [selectedModel])
 
   const authFetch = useCallback(
     async (
@@ -211,6 +228,16 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
 
   useEffect(() => {
     if (typeof window === "undefined") return
+    const storedModel = localStorage.getItem(CHAT_MODEL_KEY)
+    if (storedModel) {
+      setSelectedModel(storedModel)
+      return
+    }
+    if (DEFAULT_CHAT_MODEL) setSelectedModel(DEFAULT_CHAT_MODEL)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
     if (sessionId != null) localStorage.setItem(CHAT_SESSION_ID_KEY, String(sessionId))
     if (sessionId == null) localStorage.removeItem(CHAT_SESSION_ID_KEY)
   }, [sessionId])
@@ -220,6 +247,12 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
     if (sessionKey) localStorage.setItem(CHAT_SESSION_KEY_KEY, sessionKey)
     if (!sessionKey) localStorage.removeItem(CHAT_SESSION_KEY_KEY)
   }, [sessionKey])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (selectedModel) localStorage.setItem(CHAT_MODEL_KEY, selectedModel)
+    if (!selectedModel) localStorage.removeItem(CHAT_MODEL_KEY)
+  }, [selectedModel])
 
   useEffect(() => {
     void loadDocuments()
@@ -265,6 +298,7 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
         session_id: sessionId,
         stream: false,
         filters: selectedDocumentId != null ? { document_id: selectedDocumentId } : null,
+        model: selectedModel || null,
       }
 
       const res = await authFetch(url.toString(), {
@@ -338,7 +372,7 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
     } finally {
       setIsLoading(false)
     }
-  }, [apiBaseUrl, authFetch, selectedDocumentId, sessionId])
+  }, [apiBaseUrl, authFetch, selectedDocumentId, sessionId, selectedModel])
 
   const handleCitationClick = (docId: string, chunkIndex: number) => {
     const source = sources.find(
@@ -356,24 +390,42 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
       <div className={cn("flex flex-col flex-1 transition-all duration-300", isContextOpen && "lg:w-2/3")}>
         <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4 py-3">
           <div className="max-w-4xl mx-auto flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">Scope</span>
-              <select
-                className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
-                disabled={isLoadingDocuments}
-                value={selectedDocumentId ?? ""}
-                onChange={(e) => {
-                  const value = e.target.value
-                  setSelectedDocumentId(value ? Number(value) : null)
-                }}
-              >
-                <option value="">All documents</option>
-                {documents.map((doc) => (
-                  <option key={doc.id} value={doc.id}>
-                    {doc.name || doc.original_filename || `Document #${doc.id}`}
-                  </option>
-                ))}
-              </select>
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="inline-flex items-center gap-2">
+                <span className="text-sm font-medium whitespace-nowrap">Scope</span>
+                <select
+                  className="h-9 w-[220px] rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                  disabled={isLoadingDocuments}
+                  value={selectedDocumentId ?? ""}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setSelectedDocumentId(value ? Number(value) : null)
+                  }}
+                >
+                  <option value="">All documents</option>
+                  {documents.map((doc) => (
+                    <option key={doc.id} value={doc.id}>
+                      {doc.name || doc.original_filename || `Document #${doc.id}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="inline-flex items-center gap-2">
+                <span className="text-sm font-medium whitespace-nowrap">Model</span>
+                <select
+                  className="h-9 w-[220px] rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                  disabled={isLoading}
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                >
+                  <option value="">Auto (server default)</option>
+                  {modelOptions.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {sessionId != null ? (
                 <span className="text-xs text-muted-foreground">
                   Session #{sessionId}
