@@ -3,8 +3,11 @@
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
-import { PanelRightClose, PanelRightOpen } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { clearAuthTokens, getAccessToken, refreshAccessToken } from "@/lib/auth"
+import { PanelRightClose, PanelRightOpen, PlusCircle } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
+import { toast } from "sonner"
 import { ChatInput } from "./ChatInput"
 import { ContextPanel, DocumentSource } from "./ContextPanel"
 import { Message, MessageBubble } from "./MessageBubble"
@@ -14,13 +17,213 @@ interface RAGChatProps {
   initialSources?: DocumentSource[]
 }
 
+type SearchFilter = {
+  document_id?: number | null
+  owner_id?: number | null
+  content_type?: string | null
+  created_from?: string | null
+  created_to?: string | null
+}
+
+type ContextChunk = {
+  text: string
+  score: number
+  metadata: Record<string, unknown>
+}
+
+type ChatRequest = {
+  question: string
+  session_id?: number | null
+  stream?: boolean
+  filters?: SearchFilter | null
+  top_k?: number
+  score_threshold?: number | null
+  use_mmr?: boolean
+  mmr_lambda?: number
+  max_context_chars?: number
+  max_history_messages?: number
+  model?: string | null
+}
+
+type ChatResponse = {
+  answer: string
+  model: string
+  contexts: ContextChunk[]
+  session_id: number
+  session_key: string
+}
+
+type DocumentInDB = {
+  id: number
+  name: string
+  original_filename: string
+}
+
+const CHAT_SESSION_ID_KEY = "chat_session_id"
+const CHAT_SESSION_KEY_KEY = "chat_session_key"
+
+function extractDocumentId(metadata: Record<string, unknown>): number | null {
+  const candidates = [
+    metadata.document_id,
+    metadata.documentId,
+    metadata.doc_id,
+    metadata.docId,
+  ]
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) return value
+    if (typeof value === "string" && /^\d+$/.test(value)) return Number(value)
+  }
+  return null
+}
+
+function extractChunkIndex(metadata: Record<string, unknown>): number | null {
+  const candidates = [metadata.chunk_index, metadata.chunkIndex, metadata.index]
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) return value
+    if (typeof value === "string" && /^\d+$/.test(value)) return Number(value)
+  }
+  return null
+}
+
+function extractDocumentName(metadata: Record<string, unknown>, documentId: number | null) {
+  const candidates = [
+    metadata.document_name,
+    metadata.doc_name,
+    metadata.filename,
+    metadata.file_name,
+    metadata.original_filename,
+    metadata.name,
+    metadata.title,
+  ]
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return documentId != null ? `Document #${documentId}` : "Document"
+}
+
+function extractContentType(metadata: Record<string, unknown>) {
+  const candidates = [metadata.content_type, metadata.contentType, metadata.type]
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return "Document"
+}
+
 export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatProps) {
+  const router = useRouter()
   const [messages, setMessages] = useState<Message[]>(initialMessages)
   const [sources, setSources] = useState<DocumentSource[]>(initialSources)
   const [selectedSource, setSelectedSource] = useState<DocumentSource | null>(null)
   const [isContextOpen, setIsContextOpen] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  const apiBaseUrl = useMemo(() => {
+    const baseUrl =
+      process.env.NEXT_PUBLIC_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
+    return baseUrl?.replace(/\/+$/, "") ?? ""
+  }, [])
+
+  const [sessionId, setSessionId] = useState<number | null>(null)
+  const [sessionKey, setSessionKey] = useState<string | null>(null)
+  const [documents, setDocuments] = useState<DocumentInDB[]>([])
+  const [isLoadingDocuments, setIsLoadingDocuments] = useState(true)
+  const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null)
+
+  const authFetch = useCallback(
+    async (
+      url: string,
+      init: Omit<RequestInit, "headers"> & { headers?: Record<string, string> },
+    ) => {
+      const token = getAccessToken()
+      if (!token) {
+        clearAuthTokens()
+        router.push("/login")
+        throw new Error("You are not signed in.")
+      }
+
+      const doFetch = async (accessToken: string) => {
+        const headers: Record<string, string> = {
+          accept: "application/json",
+          ...init.headers,
+          Authorization: `Bearer ${accessToken}`,
+        }
+        return fetch(url, { ...init, headers })
+      }
+
+      const res = await doFetch(token)
+      if (res.status !== 401 && res.status !== 403) return res
+
+      const nextToken = await refreshAccessToken()
+      if (!nextToken) {
+        clearAuthTokens()
+        router.push("/login")
+        throw new Error("Session expired. Please sign in again.")
+      }
+
+      return doFetch(nextToken)
+    },
+    [router],
+  )
+
+  const loadDocuments = useCallback(async () => {
+    setIsLoadingDocuments(true)
+    if (!apiBaseUrl) {
+      setIsLoadingDocuments(false)
+      return
+    }
+
+    try {
+      const url = new URL("/api/v1/documents", apiBaseUrl)
+      url.searchParams.set("skip", "0")
+      url.searchParams.set("limit", "100")
+
+      const res = await authFetch(url.toString(), { method: "GET" })
+      if (!res.ok) return
+
+      const data = (await res.json().catch(() => null)) as unknown
+      if (data && typeof data === "object" && "items" in data) {
+        const items = (data as { items?: unknown }).items
+        if (Array.isArray(items)) {
+          setDocuments(items as DocumentInDB[])
+          return
+        }
+      }
+      if (Array.isArray(data)) {
+        setDocuments(data as DocumentInDB[])
+      }
+    } catch {
+      // Ignore (authFetch already redirects on auth errors).
+    } finally {
+      setIsLoadingDocuments(false)
+    }
+  }, [apiBaseUrl, authFetch])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const storedSessionId = localStorage.getItem(CHAT_SESSION_ID_KEY)
+    if (storedSessionId && /^\d+$/.test(storedSessionId)) {
+      setSessionId(Number(storedSessionId))
+    }
+    const storedSessionKey = localStorage.getItem(CHAT_SESSION_KEY_KEY)
+    if (storedSessionKey) setSessionKey(storedSessionKey)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (sessionId != null) localStorage.setItem(CHAT_SESSION_ID_KEY, String(sessionId))
+    if (sessionId == null) localStorage.removeItem(CHAT_SESSION_ID_KEY)
+  }, [sessionId])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (sessionKey) localStorage.setItem(CHAT_SESSION_KEY_KEY, sessionKey)
+    if (!sessionKey) localStorage.removeItem(CHAT_SESSION_KEY_KEY)
+  }, [sessionKey])
+
+  useEffect(() => {
+    void loadDocuments()
+  }, [loadDocuments])
 
   // Auto scroll to bottom when new messages arrive
   useEffect(() => {
@@ -29,7 +232,16 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
     }
   }, [messages])
 
-  const handleSend = async (content: string) => {
+  const resetChat = useCallback(() => {
+    setMessages([])
+    setSources([])
+    setSelectedSource(null)
+    setSessionId(null)
+    setSessionKey(null)
+    toast.success("Started a new chat")
+  }, [])
+
+  const handleSend = useCallback(async (content: string) => {
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -40,60 +252,93 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
     setMessages((prev) => [...prev, userMessage])
     setIsLoading(true)
 
-    // Simulate streaming response
-    setTimeout(() => {
+    try {
+      if (!apiBaseUrl) {
+        throw new Error(
+          "Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.",
+        )
+      }
+
+      const url = new URL("/api/v1/chat/ask", apiBaseUrl)
+      const request: ChatRequest = {
+        question: content,
+        session_id: sessionId,
+        stream: false,
+        filters: selectedDocumentId != null ? { document_id: selectedDocumentId } : null,
+      }
+
+      const res = await authFetch(url.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      })
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        const message = body?.detail || body?.message || `Chat failed (${res.status}).`
+        throw new Error(message)
+      }
+
+      const data = (await res.json().catch(() => null)) as ChatResponse | null
+      if (!data?.answer) throw new Error("Unexpected response from server.")
+
+      setSessionId(data.session_id ?? null)
+      setSessionKey(data.session_key ?? null)
+
+      const contextSources: DocumentSource[] = (Array.isArray(data.contexts) ? data.contexts : [])
+        .map((context, index) => {
+          const metadata = context?.metadata && typeof context.metadata === "object" ? context.metadata : {}
+          const documentIdFromMetadata = extractDocumentId(metadata)
+          const chunkIndex = extractChunkIndex(metadata) ?? index
+          const name = extractDocumentName(metadata, documentIdFromMetadata)
+          const source: DocumentSource = {
+            id: `${documentIdFromMetadata ?? "unknown"}:${chunkIndex}:${index}`,
+            name,
+            type: extractContentType(metadata),
+            chunkIndex,
+            preview: context.text,
+            similarity: context.score,
+            metadata,
+            ...(documentIdFromMetadata != null
+              ? { documentId: documentIdFromMetadata }
+              : {}),
+          }
+          return source
+        })
+        .filter((s) => Boolean(s.preview))
+
+      const citations = contextSources.map((source) => ({
+        docId: source.id,
+        docName: source.name,
+        chunkIndex: source.chunkIndex,
+        text: source.preview,
+      }))
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: `Based on the documents you've provided, here's a comprehensive answer to your question about "${content}". 
-
-The information suggests that the key points are well-documented in your source materials. Let me break this down:
-
-1. **Primary Finding**: The documents contain relevant information that addresses your query.
-
-2. **Supporting Evidence**: Multiple sources corroborate these findings.
-
-3. **Recommendations**: Consider reviewing the cited documents for more detailed information.
-
-Would you like me to elaborate on any specific aspect?`,
-        citations: [
-          {
-            docId: "doc-1",
-            docName: "Technical Documentation.pdf",
-            chunkIndex: 3,
-            text: "Sample citation text..."
-          },
-          {
-            docId: "doc-2",
-            docName: "Research Paper.pdf",
-            chunkIndex: 7,
-            text: "Another citation..."
-          }
-        ],
+        content: data.answer,
+        ...(citations.length ? { citations } : {}),
         timestamp: new Date(),
       }
 
       setMessages((prev) => [...prev, assistantMessage])
-      
-      // Update sources if we have citations
-      if (assistantMessage.citations) {
-        const newSources: DocumentSource[] = assistantMessage.citations.map((citation) => ({
-          id: citation.docId,
-          name: citation.docName,
-          type: "PDF",
-          chunkIndex: citation.chunkIndex,
-          preview: citation.text || "Preview text from document...",
-          similarity: 0.85 + Math.random() * 0.1,
-        }))
-        setSources(newSources)
-        if (newSources.length > 0) {
-          setSelectedSource(newSources[0] || null)
-        }
+      setSources(contextSources)
+      setSelectedSource(contextSources[0] ?? null)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Chat failed."
+      toast.error(message)
+      const assistantMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: message,
+        timestamp: new Date(),
       }
-
+      setMessages((prev) => [...prev, assistantMessage])
+    } finally {
       setIsLoading(false)
-    }, 1500)
-  }
+    }
+  }, [apiBaseUrl, authFetch, selectedDocumentId, sessionId])
 
   const handleCitationClick = (docId: string, chunkIndex: number) => {
     const source = sources.find(
@@ -109,6 +354,46 @@ Would you like me to elaborate on any specific aspect?`,
     <div className="flex h-[calc(100vh-80px)] relative">
       {/* Main Chat Area */}
       <div className={cn("flex flex-col flex-1 transition-all duration-300", isContextOpen && "lg:w-2/3")}>
+        <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4 py-3">
+          <div className="max-w-4xl mx-auto flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Scope</span>
+              <select
+                className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                disabled={isLoadingDocuments}
+                value={selectedDocumentId ?? ""}
+                onChange={(e) => {
+                  const value = e.target.value
+                  setSelectedDocumentId(value ? Number(value) : null)
+                }}
+              >
+                <option value="">All documents</option>
+                {documents.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.name || doc.original_filename || `Document #${doc.id}`}
+                  </option>
+                ))}
+              </select>
+              {sessionId != null ? (
+                <span className="text-xs text-muted-foreground">
+                  Session #{sessionId}
+                </span>
+              ) : null}
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2 w-fit"
+              onClick={resetChat}
+              disabled={isLoading}
+            >
+              <PlusCircle className="h-4 w-4" />
+              New chat
+            </Button>
+          </div>
+        </div>
+
         {/* Chat Messages */}
         <ScrollArea className="flex-1" ref={scrollRef}>
           <div className="max-w-4xl mx-auto p-6">
@@ -196,6 +481,7 @@ Would you like me to elaborate on any specific aspect?`,
             onSelectSource={setSelectedSource}
             onClose={() => setIsContextOpen(false)}
             isOpen={isContextOpen}
+            onOpenDocument={(documentId) => router.push(`/documents/${documentId}`)}
           />
         </div>
       )}
@@ -209,6 +495,7 @@ Would you like me to elaborate on any specific aspect?`,
             onSelectSource={setSelectedSource}
             onClose={() => setIsContextOpen(false)}
             isOpen={isContextOpen}
+            onOpenDocument={(documentId) => router.push(`/documents/${documentId}`)}
           />
         </div>
       )}
@@ -233,4 +520,3 @@ Would you like me to elaborate on any specific aspect?`,
     </div>
   )
 }
-

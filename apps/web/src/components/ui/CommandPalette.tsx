@@ -24,6 +24,11 @@ const commands = [
     group: "Navigation",
     items: [
       {
+        icon: Search,
+        label: "Go to Search",
+        href: "/search",
+      },
+      {
         icon: MessageSquare,
         label: "Go to Chat",
         href: "/chat",
@@ -105,6 +110,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
 // Command palette trigger button
 export function CommandPaletteTrigger() {
+  const router = useRouter()
   const [open, setOpen] = useState(false)
 
   return (
@@ -114,7 +120,7 @@ export function CommandPaletteTrigger() {
         className={cn(
           "relative h-9 w-full justify-start text-sm text-muted-foreground sm:pr-12 md:w-40 lg:w-64"
         )}
-        onClick={() => setOpen(true)}
+        onClick={() => router.push("/search")}
       >
         <Search className="mr-2 h-4 w-4" />
         <span className="hidden lg:inline-flex">Search...</span>
@@ -127,4 +133,3 @@ export function CommandPaletteTrigger() {
     </>
   )
 }
-

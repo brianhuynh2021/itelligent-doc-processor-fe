@@ -165,7 +165,7 @@ export default function AdminSettingsPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Support</CardTitle>
-                <CardDescription>Need a hand? We're here to help.</CardDescription>
+                <CardDescription>Need a hand? We&apos;re here to help.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
                 <p className="text-muted-foreground">
@@ -187,4 +187,3 @@ export default function AdminSettingsPage() {
     </AdminLayout>
   )
 }
-

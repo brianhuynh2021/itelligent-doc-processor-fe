@@ -224,7 +224,7 @@ export default function DocumentDetailPage({
     } finally {
       setIsLoading(false)
     }
-  }, [apiBaseUrl, documentId, router, stopPolling])
+  }, [apiBaseUrl, authFetch, documentId, stopPolling])
 
   const startPolling = useCallback(() => {
     if (typeof window === "undefined") return

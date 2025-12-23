@@ -12,6 +12,7 @@ export interface DocumentSource {
   id: string
   name: string
   type: string
+  documentId?: number
   chunkIndex: number
   preview: string
   similarity?: number
@@ -23,6 +24,7 @@ interface ContextPanelProps {
   selectedSource?: DocumentSource | null
   onSelectSource?: (source: DocumentSource) => void
   onClose?: () => void
+  onOpenDocument?: (documentId: number) => void
   isOpen?: boolean
 }
 
@@ -31,6 +33,7 @@ export function ContextPanel({
   selectedSource,
   onSelectSource,
   onClose,
+  onOpenDocument,
   isOpen = true,
 }: ContextPanelProps) {
   if (!isOpen) return null
@@ -102,7 +105,16 @@ export function ContextPanel({
                   {selectedSource.type} • Chunk #{selectedSource.chunkIndex}
                 </p>
               </div>
-              <Button variant="ghost" size="sm" className="gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2"
+                disabled={!selectedSource.documentId || !onOpenDocument}
+                onClick={() => {
+                  if (!selectedSource.documentId) return
+                  onOpenDocument?.(selectedSource.documentId)
+                }}
+              >
                 <ExternalLink className="h-4 w-4" />
                 View Full Document
               </Button>
@@ -153,4 +165,3 @@ export function ContextPanel({
     </div>
   )
 }
-
