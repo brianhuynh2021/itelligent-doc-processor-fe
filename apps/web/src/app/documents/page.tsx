@@ -50,6 +50,7 @@ type DocumentItem = {
   file_size?: number
   content_type?: string
   processing_progress?: number
+  processing_step?: string | null
   tags?: string[]
   [key: string]: unknown
 }
@@ -98,6 +99,34 @@ function formatDateTime(value: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date)
+}
+
+const TERMINAL_STATUSES = new Set([
+  "ready",
+  "done",
+  "completed",
+  "success",
+  "failed",
+  "error",
+])
+
+function normalizeStatus(value: string | null | undefined) {
+  return typeof value === "string" ? value.trim().toLowerCase() : ""
+}
+
+function getDisplayStatus(document: DocumentItem) {
+  const statusValue = typeof document.status === "string" ? document.status.trim() : ""
+  const stepValue =
+    typeof document.processing_step === "string"
+      ? document.processing_step.trim()
+      : ""
+  if (!statusValue && !stepValue) return "—"
+  if (!stepValue) return statusValue || "—"
+
+  const normalized = normalizeStatus(statusValue)
+  if (TERMINAL_STATUSES.has(normalized)) return statusValue || "—"
+
+  return stepValue
 }
 
 export default function DocumentsPage() {
@@ -552,10 +581,21 @@ export default function DocumentsPage() {
                     {filteredDocuments.map((document, index) => {
                       const label = getDocumentLabel(document)
                       const updatedAt = getUpdatedAt(document)
-                      const status =
-                        typeof document.status === "string"
-                          ? document.status
-                          : "—"
+                      const displayStatus = getDisplayStatus(document)
+                      const stepValue =
+                        typeof document.processing_step === "string"
+                          ? document.processing_step.trim()
+                          : ""
+                      const normalizedStatus = normalizeStatus(document.status)
+                      const progress =
+                        typeof document.processing_progress === "number"
+                          ? document.processing_progress
+                          : null
+                      const showProgress =
+                        Boolean(stepValue) &&
+                        displayStatus === stepValue &&
+                        progress != null &&
+                        !TERMINAL_STATUSES.has(normalizedStatus)
 
                       const key =
                         document.id != null
@@ -603,8 +643,15 @@ export default function DocumentsPage() {
                             </div>
                           </TableCell>
                           <TableCell>
-                            {status !== "—" ? (
-                              <Badge variant="secondary">{status}</Badge>
+                            {displayStatus !== "—" ? (
+                              <div className="flex items-center gap-2">
+                                <Badge variant="secondary">{displayStatus}</Badge>
+                                {showProgress ? (
+                                  <span className="text-xs text-muted-foreground">
+                                    {progress}%
+                                  </span>
+                                ) : null}
+                              </div>
                             ) : (
                               <span className="text-sm text-muted-foreground">
                                 —

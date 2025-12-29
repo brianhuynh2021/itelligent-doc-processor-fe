@@ -127,7 +127,7 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
   const [selectedSource, setSelectedSource] = useState<DocumentSource | null>(null)
   const [isContextOpen, setIsContextOpen] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const endRef = useRef<HTMLDivElement>(null)
 
   const apiBaseUrl = useMemo(() => {
     const baseUrl =
@@ -194,6 +194,7 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
       const url = new URL("/api/v1/documents", apiBaseUrl)
       url.searchParams.set("skip", "0")
       url.searchParams.set("limit", "100")
+      url.searchParams.append("status", "completed")
 
       const res = await authFetch(url.toString(), { method: "GET" })
       if (!res.ok) return
@@ -260,10 +261,8 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
 
   // Auto scroll to bottom when new messages arrive
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages])
+    endRef.current?.scrollIntoView({ block: "end", behavior: "auto" })
+  }, [messages, isLoading])
 
   const resetChat = useCallback(() => {
     setMessages([])
@@ -385,9 +384,14 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
   }
 
   return (
-    <div className="flex h-[calc(100vh-80px)] relative">
+    <div className="flex h-[calc(100vh-80px)] relative overflow-hidden">
       {/* Main Chat Area */}
-      <div className={cn("flex flex-col flex-1 transition-all duration-300", isContextOpen && "lg:w-2/3")}>
+      <div
+        className={cn(
+          "flex flex-col flex-1 min-h-0 transition-all duration-300",
+          isContextOpen && "lg:w-2/3",
+        )}
+      >
         <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4 py-3">
           <div className="max-w-4xl mx-auto flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex flex-wrap items-center gap-4">
@@ -447,7 +451,7 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
         </div>
 
         {/* Chat Messages */}
-        <ScrollArea className="flex-1" ref={scrollRef}>
+        <ScrollArea className="flex-1 min-h-0">
           <div className="max-w-4xl mx-auto p-6">
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-12">
@@ -499,6 +503,7 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
                     </div>
                   </div>
                 )}
+                <div ref={endRef} />
               </>
             )}
           </div>

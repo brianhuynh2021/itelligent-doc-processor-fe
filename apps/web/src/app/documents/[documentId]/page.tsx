@@ -74,11 +74,31 @@ function formatDateTime(value: string | null) {
   }).format(date)
 }
 
+const TERMINAL_STATUSES = new Set([
+  "ready",
+  "done",
+  "completed",
+  "success",
+  "failed",
+  "error",
+])
+
+function normalizeStatus(value: string | null | undefined) {
+  return typeof value === "string" ? value.trim().toLowerCase() : ""
+}
+
 function statusVariant(status: string): "default" | "secondary" | "outline" {
-  const normalized = status.trim().toLowerCase()
+  const normalized = normalizeStatus(status)
   if (["ready", "done", "completed", "success"].includes(normalized)) return "default"
   if (["failed", "error"].includes(normalized)) return "outline"
   return "secondary"
+}
+
+function getDisplayStatus(status: string, processingStep: string | null) {
+  const normalized = normalizeStatus(status)
+  if (!processingStep) return status || "—"
+  if (TERMINAL_STATUSES.has(normalized)) return status || "—"
+  return processingStep
 }
 
 function documentLabel(document: DocumentInDB) {
@@ -90,8 +110,8 @@ function documentLabel(document: DocumentInDB) {
 }
 
 function isTerminalStatus(document: DocumentInDB) {
-  const normalized = document.status.trim().toLowerCase()
-  if (["ready", "done", "completed", "success", "failed", "error"].includes(normalized)) {
+  const normalized = normalizeStatus(document.status)
+  if (TERMINAL_STATUSES.has(normalized)) {
     return true
   }
   if (document.processing_completed_at) return true
@@ -418,6 +438,14 @@ export default function DocumentDetailPage({
   const busy = action != null
   const label = document ? documentLabel(document) : "Document"
   const status = document?.status ?? "—"
+  const displayStatus = document
+    ? getDisplayStatus(status, document.processing_step)
+    : status
+  const normalizedStatus = normalizeStatus(status)
+  const showProgress = !TERMINAL_STATUSES.has(normalizedStatus)
+  const showProcessingStepBadge =
+    Boolean(document?.processing_step) &&
+    displayStatus !== document?.processing_step
   const progressValue = document?.processing_progress ?? 0
 
   return (
@@ -436,11 +464,11 @@ export default function DocumentDetailPage({
           <div className="space-y-1">
             <h1 className="text-2xl font-bold truncate">{label}</h1>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={statusVariant(status)}>{status}</Badge>
-              {document?.processing_step ? (
-                <Badge variant="outline">{document.processing_step}</Badge>
+              <Badge variant={statusVariant(displayStatus)}>{displayStatus}</Badge>
+              {showProcessingStepBadge ? (
+                <Badge variant="outline">{document?.processing_step}</Badge>
               ) : null}
-              {document ? (
+              {document && showProgress ? (
                 <span className="text-sm text-muted-foreground">
                   {document.processing_progress}%
                 </span>
