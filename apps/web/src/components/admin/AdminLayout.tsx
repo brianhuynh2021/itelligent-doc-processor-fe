@@ -49,7 +49,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
   const pathname = usePathname()
 
   return (
-    <div className="flex h-[calc(100vh-80px)]">
+    <div className="flex h-[calc(100vh-var(--app-header-height))]">
       {/* Sidebar */}
       <aside className="w-64 border-r bg-muted/40 p-4">
         <div className="space-y-1">

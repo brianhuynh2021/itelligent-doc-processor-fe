@@ -4,59 +4,86 @@ import { Button } from "@/components/ui/button"
 import { CommandPaletteTrigger } from "@/components/ui/CommandPalette"
 import { BarChart3, FileText, LogIn, MessageSquare, Shield } from "lucide-react"
 import Link from "next/link"
+import type { ComponentType } from "react"
 import { Logo } from "./Logo"
 import { UserMenu } from "./UserMenu"
+import { useHeaderSlots } from "./HeaderSlotsProvider"
 
-export function Header() {
-    // TODO: Replace with actual auth state
-    const isAuthenticated = false
+type HeaderUser = {
+  name?: string
+  email?: string
+  avatar?: string
+}
+
+export type HeaderNavItem = {
+  href: string
+  label: string
+  icon: ComponentType<{ className?: string }>
+}
+
+interface HeaderProps {
+  isAuthenticated?: boolean
+  user?: HeaderUser
+  onSignOut?: () => void
+  navItems?: HeaderNavItem[]
+}
+
+const defaultNavItems: HeaderNavItem[] = [
+  { href: "/chat", label: "Chat", icon: MessageSquare },
+  { href: "/documents", label: "Documents", icon: FileText },
+  { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
+  { href: "/admin/dashboard", label: "Admin", icon: Shield },
+]
+
+export function Header({
+  isAuthenticated = false,
+  user,
+  onSignOut,
+  navItems = defaultNavItems,
+}: HeaderProps) {
+    const { slots } = useHeaderSlots()
 
     return (
-        <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-            <div className="container mx-auto flex items-center justify-between py-4 px-4">
-                <Logo />
+        <header
+          className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50"
+          style={{ height: "var(--app-header-height)" }}
+        >
+            <div className="container mx-auto flex h-full items-center justify-between px-4">
+                <div className="flex items-center gap-4">
+                  <Logo />
+                  <div className="hidden md:flex items-center gap-3">
+                    <CommandPaletteTrigger />
+                    {slots.center}
+                  </div>
+                </div>
                 
                 {isAuthenticated ? (
-                    <nav className="hidden md:flex items-center gap-6">
-                        <CommandPaletteTrigger />
-                        <Link 
-                            href="/chat" 
-                            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            <MessageSquare className="h-4 w-4" />
-                            Chat
-                        </Link>
-                        <Link 
-                            href="/documents" 
-                            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            <FileText className="h-4 w-4" />
-                            Documents
-                        </Link>
-                        <Link 
-                            href="/dashboard" 
-                            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            <BarChart3 className="h-4 w-4" />
-                            Dashboard
-                        </Link>
-                        <Link 
-                            href="/admin/dashboard" 
-                            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            <Shield className="h-4 w-4" />
-                            Admin
-                        </Link>
-                        <UserMenu
-                            user={{
-                                name: "John Doe",
-                                email: "john@example.com",
-                            }}
-                            onSignOut={() => console.log("Sign out")}
-                        />
-                    </nav>
+                    <div className="flex items-center gap-3">
+                      {slots.right}
+                      <nav className="hidden md:flex items-center gap-6">
+                          {navItems.map((item) => {
+                            const Icon = item.icon
+                            return (
+                              <Link 
+                                  key={item.href}
+                                  href={item.href} 
+                                  className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                              >
+                                  <Icon className="h-4 w-4" />
+                                  {item.label}
+                              </Link>
+                            )
+                          })}
+                      </nav>
+                      <UserMenu
+                        {...(user ? { user } : {})}
+                        {...(onSignOut ? { onSignOut } : {})}
+                      />
+                    </div>
                 ) : (
-                    <nav className="flex items-center gap-4">
+                    <div className="flex items-center gap-4">
+                        {slots.right}
+                        <nav className="flex items-center gap-4">
                         <Button variant="ghost" asChild>
                             <Link href="/login">
                                 <LogIn className="h-4 w-4 mr-2" />
@@ -68,7 +95,8 @@ export function Header() {
                                 Get started
                             </Link>
                         </Button>
-                    </nav>
+                        </nav>
+                    </div>
                 )}
             </div>
         </header>

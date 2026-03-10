@@ -5,9 +5,17 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { PanelRightClose, PanelRightOpen } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
+import { useHeaderSlots } from "@/components/layout/HeaderSlotsProvider"
 import { ChatInput } from "./ChatInput"
 import { ContextPanel, DocumentSource } from "./ContextPanel"
+import { RAGHeaderControls, type RAGCollectionOption, type RAGSettings } from "./RAGHeaderControls"
 import { Message, MessageBubble } from "./MessageBubble"
+
+const RAG_COLLECTIONS: RAGCollectionOption[] = [
+  { id: "default", label: "Default KB" },
+  { id: "product", label: "Product Docs" },
+  { id: "policies", label: "Company Policies" },
+]
 
 interface RAGChatProps {
   initialMessages?: Message[]
@@ -21,6 +29,15 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
   const [isContextOpen, setIsContextOpen] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const { setSlot, clearSlot } = useHeaderSlots()
+  const [settings, setSettings] = useState<RAGSettings>({
+    collectionId: "default",
+    mode: "semantic",
+    topK: 8,
+    minScore: 0.3,
+    includeCitations: true,
+    stream: true,
+  })
 
   // Auto scroll to bottom when new messages arrive
   useEffect(() => {
@@ -28,6 +45,27 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [messages])
+
+  useEffect(() => {
+    if (sources.length === 0) {
+      clearSlot("right")
+      return
+    }
+
+    setSlot(
+      "right",
+      <RAGHeaderControls
+        sourcesCount={sources.length}
+        isContextOpen={isContextOpen}
+        onToggleContext={() => setIsContextOpen((v) => !v)}
+        collections={RAG_COLLECTIONS}
+        settings={settings}
+        onChangeSettings={setSettings}
+      />
+    )
+
+    return () => clearSlot("right")
+  }, [clearSlot, isContextOpen, setSlot, settings, sources.length])
 
   const handleSend = async (content: string) => {
     const userMessage: Message = {
@@ -106,7 +144,7 @@ Would you like me to elaborate on any specific aspect?`,
   }
 
   return (
-    <div className="flex h-[calc(100vh-80px)] relative">
+    <div className="flex h-[calc(100vh-var(--app-header-height))] relative">
       {/* Main Chat Area */}
       <div className={cn("flex flex-col flex-1 transition-all duration-300", isContextOpen && "lg:w-2/3")}>
         {/* Chat Messages */}
