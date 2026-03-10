@@ -2,99 +2,147 @@
 
 import { Button } from "@/components/ui/button"
 import { CommandPaletteTrigger } from "@/components/ui/CommandPalette"
-import { BarChart3, FileText, LogIn, MessageSquare } from "lucide-react"
+import {
+  BarChart3,
+  FileText,
+  LogIn,
+  Menu,
+  MessageSquare,
+  Shield,
+} from "lucide-react"
 import Link from "next/link"
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
-import { toast } from "sonner"
-import type { MouseEvent } from "react"
+import type { ComponentType } from "react"
+import { usePathname } from "next/navigation"
+import { cn } from "@/lib/utils"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Logo } from "./Logo"
 import { UserMenu } from "./UserMenu"
-import {
-    ACCESS_TOKEN_KEY,
-    AUTH_CHANGED_EVENT,
-    clearAuthTokens,
-    getAuthUser,
-    getStoredAuthUser,
-    hasAuthSession,
-} from "@/lib/auth"
+import { useHeaderSlots } from "./HeaderSlotsProvider"
 
-export function Header() {
-    const router = useRouter()
-    const [isAuthenticated, setIsAuthenticated] = useState(false)
-    const [user, setUser] = useState<{ name?: string; email?: string } | null>(
-        null
-    )
+type HeaderUser = {
+  name?: string
+  email?: string
+  avatar?: string
+}
 
-    useEffect(() => {
-        const sync = () => {
-            const authed = hasAuthSession()
-            setIsAuthenticated(authed)
-            setUser(authed ? (getStoredAuthUser() ?? getAuthUser()) : null)
-        }
-        sync()
+export type HeaderNavItem = {
+  href: string
+  label: string
+  icon: ComponentType<{ className?: string }>
+}
 
-        const onStorage = (event: StorageEvent) => {
-            if (event.key === ACCESS_TOKEN_KEY || event.key === null) sync()
-        }
+interface HeaderProps {
+  isAuthenticated?: boolean
+  user?: HeaderUser
+  onSignOut?: () => void
+  navItems?: HeaderNavItem[]
+}
 
-        window.addEventListener(AUTH_CHANGED_EVENT, sync)
-        window.addEventListener("storage", onStorage)
-        return () => {
-            window.removeEventListener(AUTH_CHANGED_EVENT, sync)
-            window.removeEventListener("storage", onStorage)
-        }
-    }, [])
+const defaultNavItems: HeaderNavItem[] = [
+  { href: "/chat", label: "Chat", icon: MessageSquare },
+  { href: "/documents", label: "Documents", icon: FileText },
+  { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
+  { href: "/admin/dashboard", label: "Admin", icon: Shield },
+]
 
-    const handleSignOut = (event?: MouseEvent) => {
-        const trusted =
-            event?.nativeEvent && "isTrusted" in event.nativeEvent
-                ? Boolean((event.nativeEvent as { isTrusted?: boolean }).isTrusted)
-                : false
+export function Header({
+  isAuthenticated = false,
+  user,
+  onSignOut,
+  navItems = defaultNavItems,
+}: HeaderProps) {
+    const { slots } = useHeaderSlots()
+    const pathname = usePathname()
 
-        if (event && !trusted) return
-
-        clearAuthTokens()
-        toast.success("Signed out")
-        router.push("/login")
+    const isActive = (href: string) => {
+      if (href === "/") return pathname === "/"
+      if (href.startsWith("/admin")) return pathname.startsWith("/admin")
+      return pathname === href || pathname.startsWith(`${href}/`)
     }
 
     return (
-        <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-            <div className="container mx-auto flex items-center justify-between py-4 px-4">
-                <Logo />
+        <header
+          className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50"
+          style={{ height: "var(--app-header-height)" }}
+        >
+            <div className="container mx-auto flex h-full items-center justify-between px-4">
+                <div className="flex items-center gap-4">
+                  <Logo />
+                  <div className="hidden md:flex items-center gap-3">
+                    <CommandPaletteTrigger />
+                    {slots.center}
+                  </div>
+                </div>
                 
                 {isAuthenticated ? (
-                    <nav className="hidden md:flex items-center gap-6">
-                        <CommandPaletteTrigger />
-                        <Link 
-                            href="/chat" 
-                            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            <MessageSquare className="h-4 w-4" />
-                            Chat
-                        </Link>
-                        <Link 
-                            href="/documents" 
-                            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            <FileText className="h-4 w-4" />
-                            Documents
-                        </Link>
-                        <Link 
-                            href="/admin/dashboard" 
-                            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            <BarChart3 className="h-4 w-4" />
-                            Dashboard
-                        </Link>
-                        <UserMenu
-                            {...(user ? { user } : {})}
-                            onSignOut={handleSignOut}
-                        />
-                    </nav>
+                    <div className="flex items-center gap-3">
+                      {slots.right}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" size="icon" className="md:hidden" aria-label="Open menu">
+                            <Menu className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-56">
+                          {navItems.map((item) => {
+                            const Icon = item.icon
+                            const active = isActive(item.href)
+                            return (
+                              <DropdownMenuItem key={item.href} asChild>
+                                <Link
+                                  href={item.href}
+                                  className={cn(active && "bg-accent text-accent-foreground")}
+                                >
+                                  <Icon className="h-4 w-4" />
+                                  <span>{item.label}</span>
+                                </Link>
+                              </DropdownMenuItem>
+                            )
+                          })}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem asChild>
+                            <Link href="/settings">
+                              <span>Settings</span>
+                            </Link>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                      <nav className="hidden md:flex items-center gap-6">
+                          {navItems.map((item) => {
+                            const Icon = item.icon
+                            const active = isActive(item.href)
+                            return (
+                              <Link 
+                                  key={item.href}
+                                  href={item.href} 
+                                  className={cn(
+                                    "flex items-center gap-2 text-sm font-medium transition-colors",
+                                    active
+                                      ? "text-foreground"
+                                      : "text-muted-foreground hover:text-foreground"
+                                  )}
+                              >
+                                  <Icon className="h-4 w-4" />
+                                  {item.label}
+                              </Link>
+                            )
+                          })}
+                      </nav>
+                      <UserMenu
+                        {...(user ? { user } : {})}
+                        {...(onSignOut ? { onSignOut } : {})}
+                      />
+                    </div>
                 ) : (
-                    <nav className="flex items-center gap-4">
+                    <div className="flex items-center gap-4">
+                        {slots.right}
+                        <nav className="flex items-center gap-4">
                         <Button variant="ghost" asChild>
                             <Link href="/login">
                                 <LogIn className="h-4 w-4 mr-2" />
@@ -106,7 +154,8 @@ export function Header() {
                                 Get started
                             </Link>
                         </Button>
-                    </nav>
+                        </nav>
+                    </div>
                 )}
             </div>
         </header>

@@ -6,7 +6,7 @@ import { FileText, MessageSquare, Zap, Search, Sparkles, Shield, Rocket } from "
 
 export default function Home() {
   return (
-    <div className="min-h-[calc(100vh-80px)] flex flex-col">
+    <div className="min-h-[calc(100vh-var(--app-header-height))] flex flex-col">
       {/* Hero Section */}
       <div className="container mx-auto px-4 py-16 flex-1">
         <div className="text-center max-w-3xl mx-auto mb-16">
