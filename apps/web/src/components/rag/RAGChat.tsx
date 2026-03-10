@@ -17,6 +17,13 @@ const RAG_COLLECTIONS: RAGCollectionOption[] = [
   { id: "policies", label: "Company Policies" },
 ]
 
+const STARTER_PROMPTS = [
+  "Tóm tắt các điểm chính trong tài liệu quan trọng nhất.",
+  "Liệt kê các yêu cầu và deadline có trong tài liệu.",
+  "So sánh sự khác nhau giữa 2 tài liệu liên quan đến chính sách.",
+  "Trích dẫn đoạn nguồn cho câu trả lời và giải thích ngắn gọn.",
+]
+
 interface RAGChatProps {
   initialMessages?: Message[]
   initialSources?: DocumentSource[]
@@ -174,6 +181,18 @@ Would you like me to elaborate on any specific aspect?`,
                   Ask questions about your documents and get AI-powered answers
                   with source citations.
                 </p>
+                <div className="mt-6 w-full max-w-2xl grid gap-2 sm:grid-cols-2">
+                  {STARTER_PROMPTS.map((p) => (
+                    <Button
+                      key={p}
+                      variant="outline"
+                      className="justify-start text-left h-auto whitespace-normal"
+                      onClick={() => handleSend(p)}
+                    >
+                      {p}
+                    </Button>
+                  ))}
+                </div>
               </div>
             ) : (
               <>

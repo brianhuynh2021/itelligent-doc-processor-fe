@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
+import { toast } from "sonner"
 import { useHeaderSlots } from "@/components/layout/HeaderSlotsProvider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -40,6 +41,10 @@ type IngestStatus = "pending" | "processing" | "processed" | "failed"
 type IndexStatus = "not_indexed" | "indexing" | "indexed" | "error"
 
 type RAGCollectionId = "default" | "product" | "policies"
+type CollectionFilter = "all" | RAGCollectionId
+type IngestFilter = "all" | IngestStatus
+type IndexFilter = "all" | IndexStatus
+type SortKey = "updated" | "name" | "chunks"
 
 type RAGDocumentRow = {
   id: string
@@ -129,6 +134,10 @@ export default function DocumentsPage() {
   const { setSlot, clearSlot } = useHeaderSlots()
   const [query, setQuery] = useState("")
   const [docs, setDocs] = useState<RAGDocumentRow[]>(MOCK_DOCS)
+  const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>("all")
+  const [ingestFilter, setIngestFilter] = useState<IngestFilter>("all")
+  const [indexFilter, setIndexFilter] = useState<IndexFilter>("all")
+  const [sortKey, setSortKey] = useState<SortKey>("updated")
 
   useEffect(() => {
     setSlot(
@@ -156,21 +165,34 @@ export default function DocumentsPage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return docs
-    return docs.filter((d) => {
-      const hay = [
-        d.name,
-        d.id,
-        d.owner,
-        d.type,
-        d.collectionId,
-        ...d.tags,
-      ]
-        .join(" ")
-        .toLowerCase()
-      return hay.includes(q)
+    const byFilter = docs
+      .filter((d) => (collectionFilter === "all" ? true : d.collectionId === collectionFilter))
+      .filter((d) => (ingestFilter === "all" ? true : d.ingest.status === ingestFilter))
+      .filter((d) => (indexFilter === "all" ? true : d.index.status === indexFilter))
+      .filter((d) => {
+        if (!q) return true
+        const hay = [
+          d.name,
+          d.id,
+          d.owner,
+          d.type,
+          d.collectionId,
+          ...d.tags,
+        ]
+          .join(" ")
+          .toLowerCase()
+        return hay.includes(q)
+      })
+
+    const sorted = [...byFilter].sort((a, b) => {
+      if (sortKey === "name") return a.name.localeCompare(b.name)
+      if (sortKey === "chunks") return (b.index.chunks || 0) - (a.index.chunks || 0)
+      // "updated": keep mock list order (newest first) for now
+      return 0
     })
-  }, [docs, query])
+
+    return sorted
+  }, [collectionFilter, docs, ingestFilter, indexFilter, query, sortKey])
 
   const stats = useMemo(() => {
     const total = docs.length
@@ -186,6 +208,14 @@ export default function DocumentsPage() {
     )
   }
 
+  const clearFilters = () => {
+    setQuery("")
+    setCollectionFilter("all")
+    setIngestFilter("all")
+    setIndexFilter("all")
+    setSortKey("updated")
+  }
+
   return (
     <div className="min-h-[calc(100vh-var(--app-header-height))]">
       <div className="container mx-auto px-4 py-8 space-y-8">
@@ -197,11 +227,19 @@ export default function DocumentsPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" className="gap-2">
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => toast.info("Sync is mocked for now.", { description: "Hook this to your backend when ready." })}
+            >
               <RefreshCw className="h-4 w-4" />
               Sync
             </Button>
-            <Button variant="outline" className="gap-2">
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => toast.info("Upload is mocked for now.", { description: "Next step: add upload dialog + ingest pipeline." })}
+            >
               <UploadCloud className="h-4 w-4" />
               Upload
             </Button>
@@ -276,6 +314,30 @@ export default function DocumentsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {docs.length === 0 ? (
+              <div className="py-16 text-center">
+                <div className="mx-auto mb-4 w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center">
+                  <UploadCloud className="h-6 w-6 text-primary" />
+                </div>
+                <h3 className="text-lg font-semibold">No documents yet</h3>
+                <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+                  Upload files to ingest, chunk, and index them for retrieval in RAG chat.
+                </p>
+                <div className="mt-6 flex flex-col sm:flex-row justify-center gap-2">
+                  <Button onClick={() => toast.info("Upload is mocked for now.")} className="gap-2">
+                    <UploadCloud className="h-4 w-4" />
+                    Upload your first document
+                  </Button>
+                  <Button variant="outline" asChild className="gap-2">
+                    <Link href="/chat">
+                      <Sparkles className="h-4 w-4" />
+                      Open RAG Chat
+                    </Link>
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="flex flex-col gap-4 md:hidden">
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -287,6 +349,106 @@ export default function DocumentsPage() {
                 />
               </div>
               <Separator />
+            </div>
+
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-4">
+              <div className="flex flex-wrap gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="h-9">
+                      Collection:{" "}
+                      {collectionFilter === "all"
+                        ? "All"
+                        : COLLECTIONS.find((c) => c.id === collectionFilter)?.label ?? collectionFilter}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuLabel>Collection</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuRadioGroup
+                      value={collectionFilter}
+                      onValueChange={(v) => setCollectionFilter(v as CollectionFilter)}
+                    >
+                      <DropdownMenuRadioItem value="all">All</DropdownMenuRadioItem>
+                      {COLLECTIONS.map((c) => (
+                        <DropdownMenuRadioItem key={c.id} value={c.id}>
+                          {c.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="h-9">
+                      Ingest: {ingestFilter === "all" ? "All" : ingestFilter}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuLabel>Ingest status</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuRadioGroup
+                      value={ingestFilter}
+                      onValueChange={(v) => setIngestFilter(v as IngestFilter)}
+                    >
+                      <DropdownMenuRadioItem value="all">All</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="pending">pending</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="processing">processing</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="processed">processed</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="failed">failed</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="h-9">
+                      Index: {indexFilter === "all" ? "All" : indexFilter}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuLabel>Index status</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuRadioGroup
+                      value={indexFilter}
+                      onValueChange={(v) => setIndexFilter(v as IndexFilter)}
+                    >
+                      <DropdownMenuRadioItem value="all">All</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="not_indexed">not_indexed</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="indexing">indexing</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="indexed">indexed</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="error">error</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="h-9">
+                      Sort: {sortKey}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuLabel>Sort</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuRadioGroup
+                      value={sortKey}
+                      onValueChange={(v) => setSortKey(v as SortKey)}
+                    >
+                      <DropdownMenuRadioItem value="updated">updated</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="name">name</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="chunks">chunks</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <Button variant="ghost" className="h-9" onClick={clearFilters}>
+                  Clear
+                </Button>
+              </div>
             </div>
 
             <div className="rounded-md border">
@@ -385,7 +547,12 @@ export default function DocumentsPage() {
 
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          <Button variant="outline" size="sm" className="gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-2"
+                            onClick={() => toast.info("Reindex is mocked for now.", { description: `Would reindex ${doc.id}.` })}
+                          >
                             <RefreshCw className="h-4 w-4" />
                             Reindex
                           </Button>
@@ -406,12 +573,19 @@ export default function DocumentsPage() {
                         <div className="text-sm text-muted-foreground">
                           No documents match your search.
                         </div>
+                        <div className="mt-4">
+                          <Button variant="outline" onClick={clearFilters}>
+                            Clear filters
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )}
                 </TableBody>
               </Table>
             </div>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
