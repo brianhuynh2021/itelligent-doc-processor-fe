@@ -27,6 +27,7 @@ export default function LoginPage() {
       const res = await fetch(loginUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           email: values.email,
           password: values.password,
@@ -52,7 +53,8 @@ export default function LoginPage() {
       await refreshAuthUser()
 
       toast.success("Signed in successfully")
-      router.push("/chat")
+      router.replace("/chat")
+      router.refresh()
     } catch (error) {
       console.error("Login error:", error)
       toast.error(error instanceof Error ? error.message : "Login failed. Please try again.")
