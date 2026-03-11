@@ -1,27 +1,34 @@
-"use client"
+'use client'
 
-import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { cn } from "@/lib/utils"
-import { PanelRightClose, PanelRightOpen } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
-import { useHeaderSlots } from "@/components/layout/HeaderSlotsProvider"
-import { ChatInput } from "./ChatInput"
-import { ContextPanel, DocumentSource } from "./ContextPanel"
-import { RAGHeaderControls, type RAGCollectionOption, type RAGSettings } from "./RAGHeaderControls"
-import { Message, MessageBubble } from "./MessageBubble"
+import { useHeaderSlots } from '@/components/layout/HeaderSlotsProvider'
+import { Button } from '@/components/ui/button'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { clearAuthTokens, getAccessToken, refreshAccessToken } from '@/lib/auth'
+import { cn } from '@/lib/utils'
+import { PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { ChatInput } from './ChatInput'
+import { ContextPanel, DocumentSource } from './ContextPanel'
+import {
+  RAGCollectionOption,
+  RAGHeaderControls,
+  RAGSettings,
+} from './RAGHeaderControls'
+import { Message, MessageBubble } from './MessageBubble'
 
 const RAG_COLLECTIONS: RAGCollectionOption[] = [
-  { id: "default", label: "Default KB" },
-  { id: "product", label: "Product Docs" },
-  { id: "policies", label: "Company Policies" },
+  { id: 'default', label: 'Default KB' },
+  { id: 'product', label: 'Product Docs' },
+  { id: 'policies', label: 'Company Policies' },
 ]
 
 const STARTER_PROMPTS = [
-  "Tóm tắt các điểm chính trong tài liệu quan trọng nhất.",
-  "Liệt kê các yêu cầu và deadline có trong tài liệu.",
-  "So sánh sự khác nhau giữa 2 tài liệu liên quan đến chính sách.",
-  "Trích dẫn đoạn nguồn cho câu trả lời và giải thích ngắn gọn.",
+  'Tóm tắt các điểm chính trong tài liệu quan trọng nhất.',
+  'Liệt kê các yêu cầu và deadline có trong tài liệu.',
+  'So sánh sự khác nhau giữa 2 tài liệu liên quan đến chính sách.',
+  'Trích dẫn đoạn nguồn cho câu trả lời và giải thích ngắn gọn.',
 ]
 
 interface RAGChatProps {
@@ -29,24 +36,263 @@ interface RAGChatProps {
   initialSources?: DocumentSource[]
 }
 
-export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatProps) {
+type ChatContext = {
+  text?: string
+  score?: number
+  metadata?: Record<string, unknown>
+}
+
+type ChatAskResponse = {
+  answer?: string
+  contexts?: ChatContext[]
+  model?: string
+  session_id?: number
+  session_key?: string
+}
+
+type ChatHistoryItem = {
+  id: number
+  role: string
+  content: string
+  created_at: string
+}
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value)
+  return null
+}
+
+function extractDocumentId(metadata: Record<string, unknown>): number | null {
+  const directKeys = ['document_id', 'documentId', 'doc_id', 'docId', 'id']
+  for (const key of directKeys) {
+    const found = toNumber(metadata[key])
+    if (found != null) return found
+  }
+
+  const nestedDocument = metadata.document
+  if (nestedDocument && typeof nestedDocument === 'object') {
+    const found = toNumber((nestedDocument as { id?: unknown }).id)
+    if (found != null) return found
+  }
+
+  const nestedMetadata = metadata.metadata
+  if (nestedMetadata && typeof nestedMetadata === 'object') {
+    const found = toNumber(
+      (nestedMetadata as { document_id?: unknown }).document_id,
+    )
+    if (found != null) return found
+  }
+
+  return null
+}
+
+function extractChunkIndex(
+  metadata: Record<string, unknown>,
+  fallback: number,
+): number {
+  const candidates = [
+    metadata.chunk_index,
+    metadata.chunkIndex,
+    metadata.chunk_id,
+    metadata.chunkId,
+    metadata.chunk,
+  ]
+  for (const candidate of candidates) {
+    const value = toNumber(candidate)
+    if (value != null) return value
+  }
+  return fallback
+}
+
+function extractDocumentName(
+  metadata: Record<string, unknown>,
+  documentId: number | null,
+  fallback: number,
+) {
+  const keys = [
+    'document_name',
+    'document_original_filename',
+    'file_name',
+    'filename',
+    'name',
+    'title',
+  ]
+  for (const key of keys) {
+    const value = metadata[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+
+  if (documentId != null) return `Document #${documentId}`
+  return `Context ${fallback}`
+}
+
+function mapContextsToSources(
+  contexts: ChatContext[] | undefined,
+): DocumentSource[] {
+  if (!Array.isArray(contexts)) return []
+
+  return contexts.map((context, idx) => {
+    const metadata =
+      context.metadata && typeof context.metadata === 'object'
+        ? context.metadata
+        : {}
+    const documentId = extractDocumentId(metadata)
+    const chunkIndex = extractChunkIndex(metadata, idx + 1)
+    const name = extractDocumentName(metadata, documentId, idx + 1)
+
+    const typeValue = metadata.content_type
+    const type =
+      typeof typeValue === 'string' && typeValue.trim() ? typeValue : 'Document'
+
+    const similarity =
+      typeof context.score === 'number' && Number.isFinite(context.score)
+        ? context.score
+        : undefined
+
+    const sourceId = `${documentId ?? 'doc'}-${chunkIndex}-${idx}`
+
+    const source: DocumentSource = {
+      id: sourceId,
+      name,
+      type,
+      chunkIndex,
+      preview:
+        (typeof context.text === 'string' && context.text) ||
+        (typeof metadata.text === 'string'
+          ? metadata.text
+          : 'No preview available.'),
+      metadata,
+    }
+
+    if (documentId != null) source.documentId = documentId
+    if (similarity != null) source.similarity = similarity
+
+    return source
+  })
+}
+
+function parseDate(value: string): Date {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return new Date()
+  return date
+}
+
+export function RAGChat({
+  initialMessages = [],
+  initialSources = [],
+}: RAGChatProps) {
+  const router = useRouter()
+  const apiBaseUrl = useMemo(() => {
+    const base =
+      process.env.NEXT_PUBLIC_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
+    return base?.replace(/\/+$/, '') ?? ''
+  }, [])
+
   const [messages, setMessages] = useState<Message[]>(initialMessages)
   const [sources, setSources] = useState<DocumentSource[]>(initialSources)
-  const [selectedSource, setSelectedSource] = useState<DocumentSource | null>(null)
+  const [selectedSource, setSelectedSource] = useState<DocumentSource | null>(
+    null,
+  )
   const [isContextOpen, setIsContextOpen] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
+  const [sessionId, setSessionId] = useState<number | null>(null)
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const { setSlot, clearSlot } = useHeaderSlots()
+
   const [settings, setSettings] = useState<RAGSettings>({
-    collectionId: "default",
-    mode: "semantic",
+    collectionId: 'default',
+    mode: 'semantic',
     topK: 8,
     minScore: 0.3,
     includeCitations: true,
-    stream: true,
+    stream: false,
   })
 
-  // Auto scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (getAccessToken()) return
+    clearAuthTokens()
+    router.replace('/login')
+  }, [router])
+
+  const authFetch = useCallback(
+    async (
+      url: string,
+      init: Omit<RequestInit, 'headers'> & { headers?: Record<string, string> },
+    ) => {
+      const token = getAccessToken()
+      if (!token) {
+        clearAuthTokens()
+        router.push('/login')
+        throw new Error('You are not signed in.')
+      }
+
+      const doFetch = async (accessToken: string) => {
+        const headers: Record<string, string> = {
+          accept: 'application/json',
+          ...init.headers,
+          Authorization: `Bearer ${accessToken}`,
+        }
+        return fetch(url, { ...init, headers })
+      }
+
+      const first = await doFetch(token)
+      if (first.status !== 401 && first.status !== 403) return first
+
+      const nextToken = await refreshAccessToken()
+      if (!nextToken) {
+        clearAuthTokens()
+        router.push('/login')
+        throw new Error('Session expired. Please sign in again.')
+      }
+
+      return doFetch(nextToken)
+    },
+    [router],
+  )
+
+  useEffect(() => {
+    if (!apiBaseUrl) return
+
+    const raw = localStorage.getItem('chat_session_id')
+    const parsed = raw && /^\d+$/.test(raw) ? Number(raw) : null
+    if (!parsed) return
+
+    setSessionId(parsed)
+
+    const loadHistory = async () => {
+      const url = new URL('/api/v1/chat/history', apiBaseUrl)
+      url.searchParams.set('session_id', String(parsed))
+      url.searchParams.set('limit', '50')
+
+      try {
+        const res = await authFetch(url.toString(), { method: 'GET' })
+        if (!res.ok) return
+
+        const data = (await res.json().catch(() => null)) as
+          | ChatHistoryItem[]
+          | null
+        if (!Array.isArray(data)) return
+
+        setMessages(
+          data
+            .filter((item) => item && typeof item.content === 'string')
+            .map((item) => ({
+              id: String(item.id),
+              role: item.role === 'assistant' ? 'assistant' : 'user',
+              content: item.content,
+              timestamp: parseDate(item.created_at),
+            })),
+        )
+      } catch {
+        // Ignore history loading failures and allow fresh chat.
+      }
+    }
+
+    void loadHistory()
+  }, [apiBaseUrl, authFetch])
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -55,12 +301,12 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
 
   useEffect(() => {
     if (sources.length === 0) {
-      clearSlot("right")
+      clearSlot('right')
       return
     }
 
     setSlot(
-      "right",
+      'right',
       <RAGHeaderControls
         sourcesCount={sources.length}
         isContextOpen={isContextOpen}
@@ -68,16 +314,23 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
         collections={RAG_COLLECTIONS}
         settings={settings}
         onChangeSettings={setSettings}
-      />
+      />,
     )
 
-    return () => clearSlot("right")
+    return () => clearSlot('right')
   }, [clearSlot, isContextOpen, setSlot, settings, sources.length])
 
   const handleSend = async (content: string) => {
+    if (!apiBaseUrl) {
+      toast.error(
+        'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
+      )
+      return
+    }
+
     const userMessage: Message = {
       id: Date.now().toString(),
-      role: "user",
+      role: 'user',
       content,
       timestamp: new Date(),
     }
@@ -85,64 +338,90 @@ export function RAGChat({ initialMessages = [], initialSources = [] }: RAGChatPr
     setMessages((prev) => [...prev, userMessage])
     setIsLoading(true)
 
-    // Simulate streaming response
-    setTimeout(() => {
+    try {
+      const requestBody = {
+        question: content,
+        session_id: sessionId ?? undefined,
+        top_k: Math.max(1, Math.min(10, settings.topK)),
+        score_threshold: settings.minScore,
+        use_mmr: settings.mode === 'hybrid',
+        stream: false,
+      }
+
+      const url = new URL('/api/v1/chat/ask', apiBaseUrl)
+      const res = await authFetch(url.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const message =
+          (typeof err?.detail === 'string' && err.detail) ||
+          (typeof err?.message === 'string' && err.message) ||
+          `Chat request failed (${res.status}).`
+        throw new Error(message)
+      }
+
+      const data = (await res
+        .json()
+        .catch(() => null)) as ChatAskResponse | null
+      const answer = data?.answer
+      if (typeof answer !== 'string' || !answer.trim()) {
+        throw new Error('Unexpected response from chat endpoint.')
+      }
+
+      if (typeof data?.session_id === 'number') {
+        setSessionId(data.session_id)
+        localStorage.setItem('chat_session_id', String(data.session_id))
+        if (typeof data?.session_key === 'string' && data.session_key) {
+          localStorage.setItem('chat_session_key', data.session_key)
+        }
+      }
+
+      const nextSources = mapContextsToSources(data?.contexts)
+      setSources(nextSources)
+      setSelectedSource((prev) => prev ?? nextSources[0] ?? null)
+
       const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: `Based on the documents you've provided, here's a comprehensive answer to your question about "${content}". 
-
-The information suggests that the key points are well-documented in your source materials. Let me break this down:
-
-1. **Primary Finding**: The documents contain relevant information that addresses your query.
-
-2. **Supporting Evidence**: Multiple sources corroborate these findings.
-
-3. **Recommendations**: Consider reviewing the cited documents for more detailed information.
-
-Would you like me to elaborate on any specific aspect?`,
-        citations: [
-          {
-            docId: "doc-1",
-            docName: "Technical Documentation.pdf",
-            chunkIndex: 3,
-            text: "Sample citation text..."
-          },
-          {
-            docId: "doc-2",
-            docName: "Research Paper.pdf",
-            chunkIndex: 7,
-            text: "Another citation..."
-          }
-        ],
+        id: `${Date.now()}-assistant`,
+        role: 'assistant',
+        content: answer,
+        citations: nextSources.map((source) => ({
+          docId: source.id,
+          docName: source.name,
+          chunkIndex: source.chunkIndex,
+          text: source.preview,
+        })),
         timestamp: new Date(),
       }
 
       setMessages((prev) => [...prev, assistantMessage])
-      
-      // Update sources if we have citations
-      if (assistantMessage.citations) {
-        const newSources: DocumentSource[] = assistantMessage.citations.map((citation) => ({
-          id: citation.docId,
-          name: citation.docName,
-          type: "PDF",
-          chunkIndex: citation.chunkIndex,
-          preview: citation.text || "Preview text from document...",
-          similarity: 0.85 + Math.random() * 0.1,
-        }))
-        setSources(newSources)
-        if (newSources.length > 0) {
-          setSelectedSource(newSources[0] || null)
-        }
-      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to get answer from server.'
+      toast.error(message)
 
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-error`,
+          role: 'assistant',
+          content: `Xin lỗi, mình chưa xử lý được yêu cầu này. Chi tiết lỗi: ${message}`,
+          timestamp: new Date(),
+        },
+      ])
+    } finally {
       setIsLoading(false)
-    }, 1500)
+    }
   }
 
-  const handleCitationClick = (docId: string, chunkIndex: number) => {
+  const handleCitationClick = (sourceId: string, chunkIndex: number) => {
     const source = sources.find(
-      (s) => s.id === docId && s.chunkIndex === chunkIndex
+      (s) => s.id === sourceId && s.chunkIndex === chunkIndex,
     )
     if (source) {
       setSelectedSource(source)
@@ -151,17 +430,20 @@ Would you like me to elaborate on any specific aspect?`,
   }
 
   return (
-    <div className="flex h-[calc(100vh-var(--app-header-height))] relative">
-      {/* Main Chat Area */}
-      <div className={cn("flex flex-col flex-1 transition-all duration-300", isContextOpen && "lg:w-2/3")}>
-        {/* Chat Messages */}
+    <div className="relative flex h-[calc(100vh-var(--app-header-height))]">
+      <div
+        className={cn(
+          'flex flex-1 flex-col transition-all duration-300',
+          isContextOpen && 'lg:w-2/3',
+        )}
+      >
         <ScrollArea className="flex-1" ref={scrollRef}>
-          <div className="max-w-4xl mx-auto p-6">
+          <div className="mx-auto max-w-4xl p-6">
             {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-center py-12">
-                <div className="rounded-full bg-primary/10 p-6 mb-4">
+              <div className="flex h-full flex-col items-center justify-center py-12 text-center">
+                <div className="bg-primary/10 mb-4 rounded-full p-6">
                   <svg
-                    className="h-12 w-12 text-primary"
+                    className="text-primary h-12 w-12"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -174,20 +456,22 @@ Would you like me to elaborate on any specific aspect?`,
                     />
                   </svg>
                 </div>
-                <h2 className="text-2xl font-semibold mb-2">
+                <h2 className="mb-2 text-2xl font-semibold">
                   Start a conversation
                 </h2>
                 <p className="text-muted-foreground max-w-md">
                   Ask questions about your documents and get AI-powered answers
                   with source citations.
                 </p>
-                <div className="mt-6 w-full max-w-2xl grid gap-2 sm:grid-cols-2">
+                <div className="mt-6 grid w-full max-w-2xl gap-2 sm:grid-cols-2">
                   {STARTER_PROMPTS.map((p) => (
                     <Button
                       key={p}
                       variant="outline"
-                      className="justify-start text-left h-auto whitespace-normal"
-                      onClick={() => handleSend(p)}
+                      className="h-auto justify-start whitespace-normal text-left"
+                      onClick={() => {
+                        void handleSend(p)
+                      }}
                     >
                       {p}
                     </Button>
@@ -204,16 +488,16 @@ Would you like me to elaborate on any specific aspect?`,
                   />
                 ))}
                 {isLoading && (
-                  <div className="flex gap-4 mb-6">
-                    <div className="h-8 w-8 rounded-full bg-secondary shrink-0 flex items-center justify-center">
-                      <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  <div className="mb-6 flex gap-4">
+                    <div className="bg-secondary flex h-8 w-8 shrink-0 items-center justify-center rounded-full">
+                      <div className="border-primary h-4 w-4 animate-spin rounded-full border-2 border-t-transparent" />
                     </div>
                     <div className="flex-1">
-                      <div className="bg-card border rounded-lg p-4 shadow-sm">
+                      <div className="bg-card rounded-lg border p-4 shadow-sm">
                         <div className="flex gap-2">
-                          <div className="h-2 w-2 bg-muted-foreground rounded-full animate-bounce" />
-                          <div className="h-2 w-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.2s]" />
-                          <div className="h-2 w-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.4s]" />
+                          <div className="bg-muted-foreground h-2 w-2 animate-bounce rounded-full" />
+                          <div className="bg-muted-foreground h-2 w-2 animate-bounce rounded-full [animation-delay:0.2s]" />
+                          <div className="bg-muted-foreground h-2 w-2 animate-bounce rounded-full [animation-delay:0.4s]" />
                         </div>
                       </div>
                     </div>
@@ -224,11 +508,14 @@ Would you like me to elaborate on any specific aspect?`,
           </div>
         </ScrollArea>
 
-        {/* Input Area */}
-        <ChatInput onSend={handleSend} isLoading={isLoading} />
+        <ChatInput
+          onSend={(message) => {
+            void handleSend(message)
+          }}
+          isLoading={isLoading}
+        />
 
-        {/* Toggle Context Panel Button */}
-        <div className="absolute bottom-20 right-4 lg:hidden z-10">
+        <div className="absolute bottom-20 right-4 z-10 lg:hidden">
           <Button
             variant="outline"
             size="icon"
@@ -244,35 +531,38 @@ Would you like me to elaborate on any specific aspect?`,
         </div>
       </div>
 
-      {/* Context Panel */}
       {isContextOpen && (
-        <div className="hidden lg:block w-1/3 border-l bg-background animate-in slide-in-from-right duration-300">
+        <div className="bg-background animate-in slide-in-from-right hidden w-1/3 border-l duration-300 lg:block">
           <ContextPanel
             sources={sources}
             selectedSource={selectedSource}
             onSelectSource={setSelectedSource}
             onClose={() => setIsContextOpen(false)}
+            onOpenDocument={(documentId) => {
+              router.push(`/documents/${documentId}`)
+            }}
             isOpen={isContextOpen}
           />
         </div>
       )}
 
-      {/* Mobile Context Panel Overlay */}
       {isContextOpen && (
-        <div className="lg:hidden fixed inset-0 z-50 bg-background animate-in fade-in duration-200">
+        <div className="bg-background animate-in fade-in fixed inset-0 z-50 duration-200 lg:hidden">
           <ContextPanel
             sources={sources}
             selectedSource={selectedSource}
             onSelectSource={setSelectedSource}
             onClose={() => setIsContextOpen(false)}
+            onOpenDocument={(documentId) => {
+              router.push(`/documents/${documentId}`)
+            }}
             isOpen={isContextOpen}
           />
         </div>
       )}
-      
-      {/* Desktop Toggle Context Panel Button */}
+
       {sources.length > 0 && (
-        <div className="hidden lg:block absolute top-4 right-4 z-10">
+        <div className="absolute right-4 top-4 z-10 hidden lg:block">
           <Button
             variant="outline"
             size="icon"
@@ -290,4 +580,3 @@ Would you like me to elaborate on any specific aspect?`,
     </div>
   )
 }
-

@@ -1,17 +1,17 @@
-"use client"
+'use client'
 
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
-import { Loader2, Search as SearchIcon } from "lucide-react"
-import { toast } from "sonner"
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Loader2, Search as SearchIcon } from 'lucide-react'
+import { toast } from 'sonner'
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { clearAuthTokens, getAccessToken, refreshAccessToken } from "@/lib/auth"
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { clearAuthTokens, getAccessToken, refreshAccessToken } from '@/lib/auth'
 
 type DocumentInDB = {
   id: number
@@ -55,7 +55,9 @@ type SearchResponse = {
 }
 
 function getDocumentLabel(document: DocumentInDB) {
-  return document.name || document.original_filename || `Document #${document.id}`
+  return (
+    document.name || document.original_filename || `Document #${document.id}`
+  )
 }
 
 function extractDocumentId(payload: Record<string, unknown>): number | null {
@@ -66,45 +68,45 @@ function extractDocumentId(payload: Record<string, unknown>): number | null {
     payload.docId,
   ]
   for (const value of candidates) {
-    if (typeof value === "number" && Number.isFinite(value)) return value
-    if (typeof value === "string" && /^\d+$/.test(value)) return Number(value)
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value)
   }
 
   const doc = payload.document
-  if (doc && typeof doc === "object") {
+  if (doc && typeof doc === 'object') {
     const id = (doc as { id?: unknown }).id
-    if (typeof id === "number" && Number.isFinite(id)) return id
-    if (typeof id === "string" && /^\d+$/.test(id)) return Number(id)
+    if (typeof id === 'number' && Number.isFinite(id)) return id
+    if (typeof id === 'string' && /^\d+$/.test(id)) return Number(id)
   }
 
   const metadata = payload.metadata
-  if (metadata && typeof metadata === "object") {
+  if (metadata && typeof metadata === 'object') {
     const id = (metadata as { document_id?: unknown }).document_id
-    if (typeof id === "number" && Number.isFinite(id)) return id
-    if (typeof id === "string" && /^\d+$/.test(id)) return Number(id)
+    if (typeof id === 'number' && Number.isFinite(id)) return id
+    if (typeof id === 'string' && /^\d+$/.test(id)) return Number(id)
   }
 
   return null
 }
 
-function scoreBadgeVariant(score: number): "default" | "secondary" | "outline" {
-  if (score >= 0.8) return "default"
-  if (score >= 0.5) return "secondary"
-  return "outline"
+function scoreBadgeVariant(score: number): 'default' | 'secondary' | 'outline' {
+  if (score >= 0.8) return 'default'
+  if (score >= 0.5) return 'secondary'
+  return 'outline'
 }
 
-export default function SearchPage() {
+function SearchPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
   const apiBaseUrl = useMemo(() => {
     const baseUrl =
       process.env.NEXT_PUBLIC_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
-    return baseUrl?.replace(/\/+$/, "") ?? ""
+    return baseUrl?.replace(/\/+$/, '') ?? ''
   }, [])
 
-  const initialQuery = searchParams.get("q") ?? ""
-  const initialDocumentId = searchParams.get("document_id")
+  const initialQuery = searchParams.get('q') ?? ''
+  const initialDocumentId = searchParams.get('document_id')
   const initialDocumentIdNumber =
     initialDocumentId && /^\d+$/.test(initialDocumentId)
       ? Number(initialDocumentId)
@@ -129,18 +131,18 @@ export default function SearchPage() {
   const authFetch = useCallback(
     async (
       url: string,
-      init: Omit<RequestInit, "headers"> & { headers?: Record<string, string> },
+      init: Omit<RequestInit, 'headers'> & { headers?: Record<string, string> },
     ) => {
       const token = getAccessToken()
       if (!token) {
         clearAuthTokens()
-        router.push("/login")
-        throw new Error("You are not signed in.")
+        router.push('/login')
+        throw new Error('You are not signed in.')
       }
 
       const doFetch = async (accessToken: string) => {
         const headers: Record<string, string> = {
-          accept: "application/json",
+          accept: 'application/json',
           ...init.headers,
           Authorization: `Bearer ${accessToken}`,
         }
@@ -153,8 +155,8 @@ export default function SearchPage() {
       const nextToken = await refreshAccessToken()
       if (!nextToken) {
         clearAuthTokens()
-        router.push("/login")
-        throw new Error("Session expired. Please sign in again.")
+        router.push('/login')
+        throw new Error('Session expired. Please sign in again.')
       }
 
       return doFetch(nextToken)
@@ -168,26 +170,28 @@ export default function SearchPage() {
     if (!apiBaseUrl) {
       setIsLoadingDocuments(false)
       setError(
-        "Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.",
+        'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
       )
       return
     }
 
     try {
-      const url = new URL("/api/v1/documents", apiBaseUrl)
-      url.searchParams.set("skip", "0")
-      url.searchParams.set("limit", "100")
+      const url = new URL('/api/v1/documents', apiBaseUrl)
+      url.searchParams.set('skip', '0')
+      url.searchParams.set('limit', '100')
 
-      const res = await authFetch(url.toString(), { method: "GET" })
+      const res = await authFetch(url.toString(), { method: 'GET' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         const message =
-          body?.detail || body?.message || `Failed to load documents (${res.status}).`
+          body?.detail ||
+          body?.message ||
+          `Failed to load documents (${res.status}).`
         throw new Error(message)
       }
 
       const data = (await res.json().catch(() => null)) as unknown
-      if (data && typeof data === "object" && "items" in data) {
+      if (data && typeof data === 'object' && 'items' in data) {
         const items = (data as { items?: unknown }).items
         if (Array.isArray(items)) {
           setDocuments(items as DocumentInDB[])
@@ -199,9 +203,9 @@ export default function SearchPage() {
         return
       }
 
-      throw new Error("Unexpected response from server.")
+      throw new Error('Unexpected response from server.')
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load documents.")
+      setError(err instanceof Error ? err.message : 'Failed to load documents.')
     } finally {
       setIsLoadingDocuments(false)
     }
@@ -217,7 +221,7 @@ export default function SearchPage() {
 
     if (!apiBaseUrl) {
       setError(
-        "Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.",
+        'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
       )
       return
     }
@@ -236,32 +240,35 @@ export default function SearchPage() {
     }
 
     try {
-      const url = new URL("/api/v1/search", apiBaseUrl)
+      const url = new URL('/api/v1/search', apiBaseUrl)
       const res = await authFetch(url.toString(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
       })
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        const message = body?.detail || body?.message || `Search failed (${res.status}).`
+        const message =
+          body?.detail || body?.message || `Search failed (${res.status}).`
         throw new Error(message)
       }
 
       const data = (await res.json().catch(() => null)) as SearchResponse | null
       if (!data?.results || !Array.isArray(data.results)) {
-        throw new Error("Unexpected response from server.")
+        throw new Error('Unexpected response from server.')
       }
 
       setResults(data.results)
       setUsedMmr(Boolean(data.used_mmr))
       setTotalCandidates(
-        typeof data.total_candidates === "number" ? data.total_candidates : null,
+        typeof data.total_candidates === 'number'
+          ? data.total_candidates
+          : null,
       )
       toast.success(`Found ${data.results.length} result(s)`)
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Search failed."
+      const message = err instanceof Error ? err.message : 'Search failed.'
       setError(message)
       toast.error(message)
     } finally {
@@ -270,7 +277,7 @@ export default function SearchPage() {
   }, [apiBaseUrl, authFetch, query, selectedDocumentId, topK])
 
   return (
-    <div className="container mx-auto px-4 py-10 space-y-6">
+    <div className="container mx-auto space-y-6 px-4 py-10">
       <div>
         <h1 className="text-3xl font-bold">Search</h1>
         <p className="text-muted-foreground">
@@ -284,7 +291,7 @@ export default function SearchPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 md:grid-cols-3">
-            <div className="md:col-span-2 space-y-1">
+            <div className="space-y-1 md:col-span-2">
               <Label htmlFor="search-query">Search</Label>
               <div className="flex gap-2">
                 <Input
@@ -293,7 +300,7 @@ export default function SearchPage() {
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Ask something, e.g. “What are the key responsibilities?”"
                   onKeyDown={(e) => {
-                    if (e.key !== "Enter") return
+                    if (e.key !== 'Enter') return
                     e.preventDefault()
                     void runSearch()
                   }}
@@ -318,9 +325,9 @@ export default function SearchPage() {
               <Label htmlFor="search-scope">Scope</Label>
               <select
                 id="search-scope"
-                className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none md:text-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                className="border-input shadow-xs focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full rounded-md border bg-transparent px-3 py-1 text-base outline-none focus-visible:ring-[3px] md:text-sm"
                 disabled={isLoadingDocuments}
-                value={selectedDocumentId ?? ""}
+                value={selectedDocumentId ?? ''}
                 onChange={(e) => {
                   const value = e.target.value
                   setSelectedDocumentId(value ? Number(value) : null)
@@ -333,8 +340,10 @@ export default function SearchPage() {
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-muted-foreground">
-                {isLoadingDocuments ? "Loading documents…" : "Filter results to a single document."}
+              <p className="text-muted-foreground text-xs">
+                {isLoadingDocuments
+                  ? 'Loading documents…'
+                  : 'Filter results to a single document.'}
               </p>
             </div>
           </div>
@@ -351,7 +360,7 @@ export default function SearchPage() {
                 onChange={(e) => setTopK(Number(e.target.value))}
               />
             </div>
-            <div className="md:col-span-2 flex items-end gap-2">
+            <div className="flex items-end gap-2 md:col-span-2">
               <Button
                 type="button"
                 variant="outline"
@@ -369,8 +378,8 @@ export default function SearchPage() {
           </div>
 
           {error ? (
-            <div className="rounded-md border border-destructive/20 bg-destructive/5 p-3 text-sm">
-              <p className="font-medium text-destructive">Error</p>
+            <div className="border-destructive/20 bg-destructive/5 rounded-md border p-3 text-sm">
+              <p className="text-destructive font-medium">Error</p>
               <p className="text-destructive/90 break-words">{error}</p>
             </div>
           ) : null}
@@ -380,9 +389,9 @@ export default function SearchPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-4">
           <CardTitle>Results</CardTitle>
-          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-sm">
             {usedMmr != null ? (
-              <Badge variant="outline">{usedMmr ? "MMR" : "No MMR"}</Badge>
+              <Badge variant="outline">{usedMmr ? 'MMR' : 'No MMR'}</Badge>
             ) : null}
             {totalCandidates != null ? (
               <span>{totalCandidates} candidates</span>
@@ -392,29 +401,28 @@ export default function SearchPage() {
         </CardHeader>
         <CardContent>
           {isSearching ? (
-            <div className="py-10 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+            <div className="text-muted-foreground flex items-center justify-center gap-2 py-10 text-sm">
               <Loader2 className="h-4 w-4 animate-spin" />
               Searching…
             </div>
           ) : results.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Run a search to see results. Make sure the documents have been ingested.
+            <p className="text-muted-foreground text-sm">
+              Run a search to see results. Make sure the documents have been
+              ingested.
             </p>
           ) : (
             <div className="space-y-3">
               {results.map((result, index) => {
                 const documentIdFromPayload = extractDocumentId(result.payload)
                 const snippet =
-                  typeof result.text === "string" && result.text.trim()
+                  typeof result.text === 'string' && result.text.trim()
                     ? result.text.trim()
                     : null
-                const score = typeof result.score === "number" ? result.score : 0
+                const score =
+                  typeof result.score === 'number' ? result.score : 0
 
                 return (
-                  <Card
-                    key={`${String(result.id)}-${index}`}
-                    className="p-4"
-                  >
+                  <Card key={`${String(result.id)}-${index}`} className="p-4">
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <div className="min-w-0 space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
@@ -429,11 +437,11 @@ export default function SearchPage() {
                         </div>
 
                         {snippet ? (
-                          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+                          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
                             {snippet}
                           </p>
                         ) : (
-                          <p className="text-sm text-muted-foreground">
+                          <p className="text-muted-foreground text-sm">
                             No text snippet returned.
                           </p>
                         )}
@@ -455,11 +463,11 @@ export default function SearchPage() {
                     </div>
 
                     <details className="mt-3">
-                      <summary className="cursor-pointer text-sm text-muted-foreground">
+                      <summary className="text-muted-foreground cursor-pointer text-sm">
                         View payload
                       </summary>
                       <ScrollArea className="mt-2 h-40 rounded-md border p-3">
-                        <pre className="text-xs whitespace-pre-wrap break-words">
+                        <pre className="whitespace-pre-wrap break-words text-xs">
                           {JSON.stringify(result.payload, null, 2)}
                         </pre>
                       </ScrollArea>
@@ -472,5 +480,21 @@ export default function SearchPage() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+function SearchPageFallback() {
+  return (
+    <div className="container mx-auto px-4 py-10">
+      <p className="text-muted-foreground text-sm">Loading search…</p>
+    </div>
+  )
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={<SearchPageFallback />}>
+      <SearchPageContent />
+    </Suspense>
   )
 }
