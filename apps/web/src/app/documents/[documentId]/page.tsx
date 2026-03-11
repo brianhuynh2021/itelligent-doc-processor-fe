@@ -462,7 +462,9 @@ export default function DocumentDetailPage({
             Back
           </Button>
           <div className="space-y-1">
-            <h1 className="text-2xl font-bold truncate">{label}</h1>
+            <h1 className="text-2xl font-bold leading-tight break-words">
+              {label}
+            </h1>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={statusVariant(displayStatus)}>{displayStatus}</Badge>
               {showProcessingStepBadge ? (

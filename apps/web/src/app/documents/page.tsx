@@ -37,6 +37,7 @@ import {
 import {
   Database,
   FileText,
+  Loader2,
   RefreshCw,
   Search,
   Sparkles,
@@ -78,6 +79,12 @@ type UploadedFileResponse = {
   content_type: string
   size: number
   document_id?: number
+}
+
+type IngestionResponse = {
+  document: BackendDocument
+  total_duration_ms: number
+  chunks_indexed: number
 }
 
 type RAGDocumentRow = {
@@ -270,6 +277,7 @@ export default function DocumentsPage() {
   const [isLoadingDocs, setIsLoadingDocs] = useState(true)
   const [isUploading, setIsUploading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [ingestingDocIds, setIngestingDocIds] = useState<number[]>([])
 
   useEffect(() => {
     setSlot(
@@ -331,56 +339,77 @@ export default function DocumentsPage() {
     [router],
   )
 
-  const loadDocuments = useCallback(async () => {
-    setIsLoadingDocs(true)
-    setLoadError(null)
+  const loadDocuments = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent) setIsLoadingDocs(true)
+      setLoadError(null)
 
-    if (!apiBaseUrl) {
-      setLoadError(
-        'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
-      )
-      setIsLoadingDocs(false)
-      return
-    }
+      if (!apiBaseUrl) {
+        setLoadError(
+          'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
+        )
+        if (!silent) setIsLoadingDocs(false)
+        return
+      }
 
-    try {
-      const url = new URL('/api/v1/documents', apiBaseUrl)
-      url.searchParams.set('skip', '0')
-      url.searchParams.set('limit', '100')
+      try {
+        const url = new URL('/api/v1/documents', apiBaseUrl)
+        url.searchParams.set('skip', '0')
+        url.searchParams.set('limit', '100')
 
-      const res = await authFetch(url.toString(), { method: 'GET' })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
+        const res = await authFetch(url.toString(), { method: 'GET' })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          const message =
+            body?.detail ||
+            body?.message ||
+            `Failed to load documents (${res.status}).`
+          throw new Error(message)
+        }
+
+        const data = (await res
+          .json()
+          .catch(() => null)) as DocumentListResponse | null
+        if (!data || !Array.isArray(data.items)) {
+          throw new Error('Unexpected response from /documents endpoint.')
+        }
+
+        setDocs(
+          data.items.map((item) => mapDocumentToRow(item, collectionByDocId)),
+        )
+      } catch (error) {
         const message =
-          body?.detail ||
-          body?.message ||
-          `Failed to load documents (${res.status}).`
-        throw new Error(message)
+          error instanceof Error ? error.message : 'Failed to load documents.'
+        setLoadError(message)
+        if (!silent) toast.error(message)
+      } finally {
+        if (!silent) setIsLoadingDocs(false)
       }
-
-      const data = (await res
-        .json()
-        .catch(() => null)) as DocumentListResponse | null
-      if (!data || !Array.isArray(data.items)) {
-        throw new Error('Unexpected response from /documents endpoint.')
-      }
-
-      setDocs(
-        data.items.map((item) => mapDocumentToRow(item, collectionByDocId)),
-      )
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Failed to load documents.'
-      setLoadError(message)
-      toast.error(message)
-    } finally {
-      setIsLoadingDocs(false)
-    }
-  }, [apiBaseUrl, authFetch, collectionByDocId])
+    },
+    [apiBaseUrl, authFetch, collectionByDocId],
+  )
 
   useEffect(() => {
     void loadDocuments()
   }, [loadDocuments])
+
+  const hasActiveProcessing = useMemo(
+    () =>
+      docs.some(
+        (d) => d.ingest.status === 'processing' || d.index.status === 'indexing',
+      ),
+    [docs],
+  )
+
+  useEffect(() => {
+    if (!hasActiveProcessing || typeof window === 'undefined') return
+
+    const timer = window.setInterval(() => {
+      void loadDocuments({ silent: true })
+    }, 4000)
+
+    return () => window.clearInterval(timer)
+  }, [hasActiveProcessing, loadDocuments])
 
   const openFilePicker = () => {
     fileInputRef.current?.click()
@@ -426,7 +455,12 @@ export default function DocumentsPage() {
         description: `${uploadedName} created ${docLabel}.`,
       })
 
-      await loadDocuments()
+      await loadDocuments({ silent: true })
+
+      if (typeof data?.document_id === 'number') {
+        toast.info(`Auto-ingest started for Document #${data.document_id}.`)
+        void ingestDocument(data.document_id)
+      }
     } catch (error) {
       const message =
         error instanceof Error
@@ -438,6 +472,55 @@ export default function DocumentsPage() {
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
+
+  const ingestDocument = useCallback(
+    async (documentId: number) => {
+      if (!apiBaseUrl) {
+        toast.error(
+          'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
+        )
+        return
+      }
+
+      setIngestingDocIds((prev) =>
+        prev.includes(documentId) ? prev : [...prev, documentId],
+      )
+
+      try {
+        const url = new URL(`/api/v1/documents/${documentId}/ingest`, apiBaseUrl)
+        url.searchParams.set('chunk_size', '1000')
+        url.searchParams.set('chunk_overlap', '200')
+
+        const res = await authFetch(url.toString(), { method: 'POST' })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          const message =
+            body?.detail || body?.message || `Ingest failed (${res.status}).`
+          throw new Error(message)
+        }
+
+        const data = (await res
+          .json()
+          .catch(() => null)) as IngestionResponse | null
+        const indexedChunks = data?.chunks_indexed
+
+        toast.success(
+          indexedChunks != null
+            ? `Document #${documentId} ingested (${indexedChunks} chunks indexed).`
+            : `Document #${documentId} ingested successfully.`,
+        )
+
+        await loadDocuments({ silent: true })
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to ingest document.'
+        toast.error(`Document #${documentId}: ${message}`)
+      } finally {
+        setIngestingDocIds((prev) => prev.filter((id) => id !== documentId))
+      }
+    },
+    [apiBaseUrl, authFetch, loadDocuments],
+  )
 
   const handleFileInputChange = async (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -850,9 +933,11 @@ export default function DocumentsPage() {
                     <TableBody>
                       {filtered.map((doc) => (
                         <TableRow key={doc.id}>
-                          <TableCell>
-                            <div className="space-y-1">
-                              <div className="font-medium">{doc.name}</div>
+                          <TableCell className="align-top">
+                            <div className="max-w-[28rem] space-y-1">
+                              <div className="break-all font-medium leading-snug">
+                                {doc.name}
+                              </div>
                               <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
                                 <span>#{doc.documentId}</span>
                                 <span>•</span>
@@ -953,19 +1038,34 @@ export default function DocumentsPage() {
 
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="gap-2"
-                                onClick={() =>
-                                  toast.info('Reindex is next step.', {
-                                    description: `Add /documents/${doc.documentId}/ingest integration next.`,
-                                  })
-                                }
-                              >
-                                <RefreshCw className="h-4 w-4" />
-                                Reindex
-                              </Button>
+                              {(() => {
+                                const isIngesting = ingestingDocIds.includes(
+                                  doc.documentId,
+                                )
+                                const actionLabel =
+                                  doc.index.status === 'indexed'
+                                    ? 'Reindex'
+                                    : 'Ingest'
+
+                                return (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-2"
+                                    disabled={isIngesting}
+                                    onClick={() => {
+                                      void ingestDocument(doc.documentId)
+                                    }}
+                                  >
+                                    {isIngesting ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <RefreshCw className="h-4 w-4" />
+                                    )}
+                                    {isIngesting ? 'Running...' : actionLabel}
+                                  </Button>
+                                )
+                              })()}
                               <Button size="sm" className="gap-2" asChild>
                                 <Link href={`/documents/${doc.documentId}`}>
                                   <FileText className="h-4 w-4" />
