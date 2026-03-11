@@ -38,6 +38,7 @@ import {
   Database,
   FileText,
   Loader2,
+  MessageSquare,
   RefreshCw,
   Search,
   Sparkles,
@@ -112,6 +113,34 @@ const COLLECTIONS: { id: RAGCollectionId; label: string }[] = [
   { id: 'product', label: 'Product Docs' },
   { id: 'policies', label: 'Company Policies' },
 ]
+
+const COLLECTION_STORAGE_KEY = 'rag_collection_by_doc_id'
+
+function isRagCollectionId(value: string): value is RAGCollectionId {
+  return COLLECTIONS.some((collection) => collection.id === value)
+}
+
+function parseCollectionMap(raw: string | null): Record<number, RAGCollectionId> {
+  if (!raw) return {}
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object') return {}
+
+    const entries = Object.entries(parsed)
+      .map(([key, value]) => {
+        const documentId = Number(key)
+        if (!Number.isFinite(documentId)) return null
+        if (typeof value !== 'string' || !isRagCollectionId(value)) return null
+        return [documentId, value] as const
+      })
+      .filter((entry): entry is readonly [number, RAGCollectionId] => entry != null)
+
+    return Object.fromEntries(entries)
+  } catch {
+    return {}
+  }
+}
 
 function badgeForIngest(status: IngestStatus) {
   if (status === 'processed') return <Badge>Ingested</Badge>
@@ -278,6 +307,7 @@ export default function DocumentsPage() {
   const [isUploading, setIsUploading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [ingestingDocIds, setIngestingDocIds] = useState<number[]>([])
+  const [hasLoadedCollectionMap, setHasLoadedCollectionMap] = useState(false)
 
   useEffect(() => {
     setSlot(
@@ -338,6 +368,21 @@ export default function DocumentsPage() {
     },
     [router],
   )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem(COLLECTION_STORAGE_KEY)
+    setCollectionByDocId(parseCollectionMap(stored))
+    setHasLoadedCollectionMap(true)
+  }, [])
+
+  useEffect(() => {
+    if (!hasLoadedCollectionMap || typeof window === 'undefined') return
+    window.localStorage.setItem(
+      COLLECTION_STORAGE_KEY,
+      JSON.stringify(collectionByDocId),
+    )
+  }, [collectionByDocId, hasLoadedCollectionMap])
 
   const loadDocuments = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
@@ -1037,7 +1082,7 @@ export default function DocumentsPage() {
                           </TableCell>
 
                           <TableCell className="text-right">
-                            <div className="flex justify-end gap-2">
+                            <div className="flex flex-wrap justify-end gap-2">
                               {(() => {
                                 const isIngesting = ingestingDocIds.includes(
                                   doc.documentId,
@@ -1066,6 +1111,20 @@ export default function DocumentsPage() {
                                   </Button>
                                 )
                               })()}
+                              <Button variant="outline" size="sm" className="gap-2" asChild>
+                                <Link
+                                  href={`/chat?document_id=${doc.documentId}&collection=${doc.collectionId}&new=1`}
+                                >
+                                  <MessageSquare className="h-4 w-4" />
+                                  Ask
+                                </Link>
+                              </Button>
+                              <Button variant="outline" size="sm" className="gap-2" asChild>
+                                <Link href={`/search?document_id=${doc.documentId}`}>
+                                  <Search className="h-4 w-4" />
+                                  Search
+                                </Link>
+                              </Button>
                               <Button size="sm" className="gap-2" asChild>
                                 <Link href={`/documents/${doc.documentId}`}>
                                   <FileText className="h-4 w-4" />

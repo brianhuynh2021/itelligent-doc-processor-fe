@@ -6,7 +6,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { clearAuthTokens, getAccessToken, refreshAccessToken } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { PanelRightClose, PanelRightOpen } from 'lucide-react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ChatInput } from './ChatInput'
@@ -183,11 +183,31 @@ export function RAGChat({
   initialSources = [],
 }: RAGChatProps) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const apiBaseUrl = useMemo(() => {
     const base =
       process.env.NEXT_PUBLIC_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
     return base?.replace(/\/+$/, '') ?? ''
   }, [])
+
+  const scopedDocumentId = useMemo(() => {
+    const raw = searchParams.get('document_id')
+    if (!raw || !/^\d+$/.test(raw)) return null
+    return Number(raw)
+  }, [searchParams])
+
+  const scopedCollectionId = useMemo(() => {
+    const raw = searchParams.get('collection')
+    if (!raw) return null
+    return RAG_COLLECTIONS.some((collection) => collection.id === raw)
+      ? raw
+      : null
+  }, [searchParams])
+
+  const shouldStartFresh = useMemo(
+    () => searchParams.get('new') === '1',
+    [searchParams],
+  )
 
   const [messages, setMessages] = useState<Message[]>(initialMessages)
   const [sources, setSources] = useState<DocumentSource[]>(initialSources)
@@ -199,6 +219,7 @@ export function RAGChat({
   const [sessionId, setSessionId] = useState<number | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const scopeInitRef = useRef<string | null>(null)
   const { setSlot, clearSlot } = useHeaderSlots()
 
   const [settings, setSettings] = useState<RAGSettings>({
@@ -209,6 +230,29 @@ export function RAGChat({
     includeCitations: true,
     stream: false,
   })
+
+  useEffect(() => {
+    if (!scopedCollectionId) return
+    setSettings((prev) =>
+      prev.collectionId === scopedCollectionId
+        ? prev
+        : { ...prev, collectionId: scopedCollectionId },
+    )
+  }, [scopedCollectionId])
+
+  useEffect(() => {
+    if (!shouldStartFresh || typeof window === 'undefined') return
+    const scopeKey = `${scopedDocumentId ?? ''}:${scopedCollectionId ?? ''}`
+    if (scopeInitRef.current === scopeKey) return
+    scopeInitRef.current = scopeKey
+
+    setMessages([])
+    setSources([])
+    setSelectedSource(null)
+    setSessionId(null)
+    window.localStorage.removeItem('chat_session_id')
+    window.localStorage.removeItem('chat_session_key')
+  }, [scopedCollectionId, scopedDocumentId, shouldStartFresh])
 
   useEffect(() => {
     if (getAccessToken()) return
@@ -254,6 +298,7 @@ export function RAGChat({
 
   useEffect(() => {
     if (!apiBaseUrl) return
+    if (shouldStartFresh || scopedDocumentId != null) return
 
     const raw = localStorage.getItem('chat_session_id')
     const parsed = raw && /^\d+$/.test(raw) ? Number(raw) : null
@@ -291,7 +336,7 @@ export function RAGChat({
     }
 
     void loadHistory()
-  }, [apiBaseUrl, authFetch])
+  }, [apiBaseUrl, authFetch, scopedDocumentId, shouldStartFresh])
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -345,6 +390,12 @@ export function RAGChat({
         top_k: Math.max(1, Math.min(10, settings.topK)),
         score_threshold: settings.minScore,
         use_mmr: settings.mode === 'hybrid',
+        filters:
+          scopedDocumentId != null
+            ? {
+                document_id: scopedDocumentId,
+              }
+            : undefined,
         stream: false,
       }
 
@@ -439,6 +490,33 @@ export function RAGChat({
       >
         <ScrollArea className="flex-1" ref={scrollRef}>
           <div className="mx-auto max-w-4xl p-6">
+            {scopedDocumentId != null && (
+              <div className="bg-muted/50 mb-4 flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                <p className="text-muted-foreground">
+                  Scoped to <span className="text-foreground">Document #{scopedDocumentId}</span>
+                  {scopedCollectionId ? (
+                    <>
+                      {' '}
+                      in{' '}
+                      <span className="text-foreground">
+                        {RAG_COLLECTIONS.find((c) => c.id === scopedCollectionId)?.label ??
+                          scopedCollectionId}
+                      </span>
+                    </>
+                  ) : null}
+                  .
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    router.replace('/chat')
+                  }}
+                >
+                  Clear
+                </Button>
+              </div>
+            )}
             {messages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center py-12 text-center">
                 <div className="bg-primary/10 mb-4 rounded-full p-6">

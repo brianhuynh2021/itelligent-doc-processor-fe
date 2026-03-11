@@ -1,6 +1,7 @@
+import { Suspense } from "react"
 import { RAGChat } from "@/components/rag/RAGChat"
 
-export default function ChatPage() {
+function ChatPageContent() {
   return (
     <div className="h-full">
       <RAGChat />
@@ -8,3 +9,10 @@ export default function ChatPage() {
   )
 }
 
+export default function ChatPage() {
+  return (
+    <Suspense fallback={<div className="h-full" />}>
+      <ChatPageContent />
+    </Suspense>
+  )
+}
