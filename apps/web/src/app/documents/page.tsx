@@ -36,12 +36,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import {
   Database,
+  Download,
   FileText,
   Loader2,
   MessageSquare,
   RefreshCw,
   Search,
   Sparkles,
+  Trash2,
   TriangleAlert,
   UploadCloud,
 } from 'lucide-react'
@@ -88,6 +90,12 @@ type IngestionResponse = {
   chunks_indexed: number
 }
 
+type FileMetadataResponse = {
+  file_id: string
+  filename: string
+  url?: string | null
+}
+
 type RAGDocumentRow = {
   id: string
   documentId: number
@@ -115,6 +123,7 @@ const COLLECTIONS: { id: RAGCollectionId; label: string }[] = [
 ]
 
 const COLLECTION_STORAGE_KEY = 'rag_collection_by_doc_id'
+const FILE_ID_STORAGE_KEY = 'rag_file_id_by_doc_id'
 
 function isRagCollectionId(value: string): value is RAGCollectionId {
   return COLLECTIONS.some((collection) => collection.id === value)
@@ -136,6 +145,25 @@ function parseCollectionMap(raw: string | null): Record<number, RAGCollectionId>
       })
       .filter((entry): entry is readonly [number, RAGCollectionId] => entry != null)
 
+    return Object.fromEntries(entries)
+  } catch {
+    return {}
+  }
+}
+
+function parseFileIdMap(raw: string | null): Record<number, string> {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object') return {}
+    const entries = Object.entries(parsed)
+      .map(([key, value]) => {
+        const documentId = Number(key)
+        if (!Number.isFinite(documentId)) return null
+        if (typeof value !== 'string' || !value.trim()) return null
+        return [documentId, value.trim()] as const
+      })
+      .filter((entry): entry is readonly [number, string] => entry != null)
     return Object.fromEntries(entries)
   } catch {
     return {}
@@ -307,7 +335,9 @@ export default function DocumentsPage() {
   const [isUploading, setIsUploading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [ingestingDocIds, setIngestingDocIds] = useState<number[]>([])
+  const [fileIdByDocId, setFileIdByDocId] = useState<Record<number, string>>({})
   const [hasLoadedCollectionMap, setHasLoadedCollectionMap] = useState(false)
+  const [hasLoadedFileMap, setHasLoadedFileMap] = useState(false)
 
   useEffect(() => {
     setSlot(
@@ -377,12 +407,24 @@ export default function DocumentsPage() {
   }, [])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem(FILE_ID_STORAGE_KEY)
+    setFileIdByDocId(parseFileIdMap(stored))
+    setHasLoadedFileMap(true)
+  }, [])
+
+  useEffect(() => {
     if (!hasLoadedCollectionMap || typeof window === 'undefined') return
     window.localStorage.setItem(
       COLLECTION_STORAGE_KEY,
       JSON.stringify(collectionByDocId),
     )
   }, [collectionByDocId, hasLoadedCollectionMap])
+
+  useEffect(() => {
+    if (!hasLoadedFileMap || typeof window === 'undefined') return
+    window.localStorage.setItem(FILE_ID_STORAGE_KEY, JSON.stringify(fileIdByDocId))
+  }, [fileIdByDocId, hasLoadedFileMap])
 
   const loadDocuments = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
@@ -500,6 +542,17 @@ export default function DocumentsPage() {
         description: `${uploadedName} created ${docLabel}.`,
       })
 
+      if (
+        typeof data?.document_id === 'number' &&
+        typeof data?.file_id === 'string' &&
+        data.file_id
+      ) {
+        setFileIdByDocId((prev) => ({
+          ...prev,
+          [data.document_id as number]: data.file_id as string,
+        }))
+      }
+
       await loadDocuments({ silent: true })
 
       if (typeof data?.document_id === 'number') {
@@ -565,6 +618,119 @@ export default function DocumentsPage() {
       }
     },
     [apiBaseUrl, authFetch, loadDocuments],
+  )
+
+  const getFileIdForDocument = useCallback(
+    (documentId: number) => fileIdByDocId[documentId] ?? null,
+    [fileIdByDocId],
+  )
+
+  const downloadDocumentFile = useCallback(
+    async (documentId: number) => {
+      if (!apiBaseUrl) {
+        toast.error(
+          'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
+        )
+        return
+      }
+
+      const fileId = getFileIdForDocument(documentId)
+      if (!fileId) {
+        toast.error(`Missing file_id for Document #${documentId}.`)
+        return
+      }
+
+      try {
+        const metadataUrl = new URL(`/api/v1/files/${fileId}`, apiBaseUrl)
+        const metadataRes = await authFetch(metadataUrl.toString(), { method: 'GET' })
+        if (!metadataRes.ok) {
+          const body = await metadataRes.json().catch(() => ({}))
+          const message =
+            body?.detail ||
+            body?.message ||
+            `File metadata failed (${metadataRes.status}).`
+          throw new Error(message)
+        }
+
+        const metadata = (await metadataRes
+          .json()
+          .catch(() => null)) as FileMetadataResponse | null
+
+        const downloadPath = metadata?.url || `/api/v1/files/${fileId}/download`
+        const downloadUrl = new URL(downloadPath, apiBaseUrl)
+        const downloadRes = await authFetch(downloadUrl.toString(), {
+          method: 'GET',
+        })
+        if (!downloadRes.ok) {
+          const body = await downloadRes.json().catch(() => ({}))
+          const message =
+            body?.detail ||
+            body?.message ||
+            `Download failed (${downloadRes.status}).`
+          throw new Error(message)
+        }
+
+        const blob = await downloadRes.blob()
+        const objectUrl = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = objectUrl
+        a.download = metadata?.filename || `${fileId}`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        window.URL.revokeObjectURL(objectUrl)
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to download file.'
+        toast.error(message)
+      }
+    },
+    [apiBaseUrl, authFetch, getFileIdForDocument],
+  )
+
+  const deleteDocumentFile = useCallback(
+    async (documentId: number) => {
+      if (!apiBaseUrl) {
+        toast.error(
+          'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
+        )
+        return
+      }
+
+      const fileId = getFileIdForDocument(documentId)
+      if (!fileId) {
+        toast.error(`Missing file_id for Document #${documentId}.`)
+        return
+      }
+
+      const confirmed = window.confirm(
+        `Delete file ${fileId} for Document #${documentId}?`,
+      )
+      if (!confirmed) return
+
+      try {
+        const url = new URL(`/api/v1/files/${fileId}`, apiBaseUrl)
+        const res = await authFetch(url.toString(), { method: 'DELETE' })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          const message =
+            body?.detail || body?.message || `Delete file failed (${res.status}).`
+          throw new Error(message)
+        }
+
+        setFileIdByDocId((prev) => {
+          const next = { ...prev }
+          delete next[documentId]
+          return next
+        })
+        toast.success(`Deleted file ${fileId}.`)
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to delete file.'
+        toast.error(message)
+      }
+    },
+    [apiBaseUrl, authFetch, getFileIdForDocument],
   )
 
   const handleFileInputChange = async (
@@ -1124,6 +1290,40 @@ export default function DocumentsPage() {
                                   <Search className="h-4 w-4" />
                                   Search
                                 </Link>
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-2"
+                                disabled={!getFileIdForDocument(doc.documentId)}
+                                title={
+                                  getFileIdForDocument(doc.documentId)
+                                    ? `Download file ${getFileIdForDocument(doc.documentId)}`
+                                    : 'File ID is unavailable for this document.'
+                                }
+                                onClick={() => {
+                                  void downloadDocumentFile(doc.documentId)
+                                }}
+                              >
+                                <Download className="h-4 w-4" />
+                                Download
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-2"
+                                disabled={!getFileIdForDocument(doc.documentId)}
+                                title={
+                                  getFileIdForDocument(doc.documentId)
+                                    ? `Delete file ${getFileIdForDocument(doc.documentId)}`
+                                    : 'File ID is unavailable for this document.'
+                                }
+                                onClick={() => {
+                                  void deleteDocumentFile(doc.documentId)
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Delete file
                               </Button>
                               <Button size="sm" className="gap-2" asChild>
                                 <Link href={`/documents/${doc.documentId}`}>

@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button"
 import {
+  DropdownMenuCheckboxItem,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
@@ -19,6 +20,11 @@ export type RetrievalMode = "semantic" | "hybrid"
 
 export interface RAGCollectionOption {
   id: string
+  label: string
+}
+
+export interface RAGDocumentOption {
+  id: number
   label: string
 }
 
@@ -41,6 +47,9 @@ export function RAGHeaderControls({
   isContextOpen,
   onToggleContext,
   collections,
+  documents,
+  selectedDocumentId,
+  onChangeSelectedDocumentId,
   settings,
   onChangeSettings,
 }: {
@@ -48,6 +57,9 @@ export function RAGHeaderControls({
   isContextOpen: boolean
   onToggleContext: () => void
   collections: RAGCollectionOption[]
+  documents: RAGDocumentOption[]
+  selectedDocumentId: number | null
+  onChangeSelectedDocumentId: (documentId: number | null) => void
   settings: RAGSettings
   onChangeSettings: (next: RAGSettings) => void
 }) {
@@ -110,6 +122,30 @@ export function RAGHeaderControls({
 
             <DropdownMenuSeparator />
 
+            <div className="space-y-1.5">
+              <Label htmlFor="rag-document-scope" className="text-xs text-muted-foreground">
+                Document scope
+              </Label>
+              <select
+                id="rag-document-scope"
+                className="border-input shadow-xs focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+                value={selectedDocumentId ?? ""}
+                onChange={(e) => {
+                  const value = e.target.value
+                  onChangeSelectedDocumentId(value ? Number(value) : null)
+                }}
+              >
+                <option value="">All documents</option>
+                {documents.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <DropdownMenuSeparator />
+
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="rag-topk" className="text-xs text-muted-foreground">
@@ -149,6 +185,20 @@ export function RAGHeaderControls({
                 />
               </div>
             </div>
+
+            <DropdownMenuSeparator />
+
+            <DropdownMenuCheckboxItem
+              checked={settings.stream}
+              onCheckedChange={(next) =>
+                onChangeSettings({
+                  ...settings,
+                  stream: Boolean(next),
+                })
+              }
+            >
+              Use WebSocket stream
+            </DropdownMenuCheckboxItem>
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -157,6 +207,7 @@ export function RAGHeaderControls({
         variant="outline"
         size="icon"
         className="h-9 w-9"
+        disabled={sourcesCount === 0}
         onClick={onToggleContext}
         aria-label={isContextOpen ? "Close context panel" : "Open context panel"}
       >
@@ -169,4 +220,3 @@ export function RAGHeaderControls({
     </div>
   )
 }
-

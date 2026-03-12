@@ -12,6 +12,7 @@ import { toast } from 'sonner'
 import { ChatInput } from './ChatInput'
 import { ContextPanel, DocumentSource } from './ContextPanel'
 import {
+  RAGDocumentOption,
   RAGCollectionOption,
   RAGHeaderControls,
   RAGSettings,
@@ -55,6 +56,21 @@ type ChatHistoryItem = {
   role: string
   content: string
   created_at: string
+}
+
+type ChatSessionResponse = {
+  id: number
+  session_key?: string
+}
+
+type DocumentListItem = {
+  id: number
+  name?: string | null
+  original_filename?: string | null
+}
+
+type DocumentListResponse = {
+  items: DocumentListItem[]
 }
 
 function toNumber(value: unknown): number | null {
@@ -178,6 +194,14 @@ function parseDate(value: string): Date {
   return date
 }
 
+function documentLabel(doc: DocumentListItem): string {
+  return (
+    (typeof doc.name === 'string' && doc.name.trim()) ||
+    (typeof doc.original_filename === 'string' && doc.original_filename.trim()) ||
+    `Document #${doc.id}`
+  )
+}
+
 export function RAGChat({
   initialMessages = [],
   initialSources = [],
@@ -209,6 +233,9 @@ export function RAGChat({
     [searchParams],
   )
 
+  const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(
+    scopedDocumentId,
+  )
   const [messages, setMessages] = useState<Message[]>(initialMessages)
   const [sources, setSources] = useState<DocumentSource[]>(initialSources)
   const [selectedSource, setSelectedSource] = useState<DocumentSource | null>(
@@ -217,6 +244,7 @@ export function RAGChat({
   const [isContextOpen, setIsContextOpen] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId, setSessionId] = useState<number | null>(null)
+  const [documents, setDocuments] = useState<RAGDocumentOption[]>([])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const scopeInitRef = useRef<string | null>(null)
@@ -230,6 +258,10 @@ export function RAGChat({
     includeCitations: true,
     stream: false,
   })
+
+  useEffect(() => {
+    setSelectedDocumentId(scopedDocumentId)
+  }, [scopedDocumentId])
 
   useEffect(() => {
     if (!scopedCollectionId) return
@@ -296,6 +328,102 @@ export function RAGChat({
     [router],
   )
 
+  const persistSession = useCallback((id: number, sessionKey?: string) => {
+    setSessionId(id)
+    localStorage.setItem('chat_session_id', String(id))
+    if (sessionKey) {
+      localStorage.setItem('chat_session_key', sessionKey)
+    }
+  }, [])
+
+  const createSession = useCallback(async () => {
+    if (!apiBaseUrl) return null
+    const url = new URL('/api/v1/chat/sessions', apiBaseUrl)
+    const res = await authFetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      const message =
+        body?.detail || body?.message || `Create session failed (${res.status}).`
+      throw new Error(message)
+    }
+
+    const data = (await res
+      .json()
+      .catch(() => null)) as ChatSessionResponse | null
+    if (!data?.id) {
+      throw new Error('Unexpected response from chat sessions endpoint.')
+    }
+    persistSession(data.id, data.session_key)
+    return data.id
+  }, [apiBaseUrl, authFetch, persistSession])
+
+  const loadSessionMessages = useCallback(
+    async (targetSessionId: number) => {
+      if (!apiBaseUrl) return
+      const primary = new URL(
+        `/api/v1/chat/sessions/${targetSessionId}/messages`,
+        apiBaseUrl,
+      )
+      primary.searchParams.set('limit', '50')
+
+      let res = await authFetch(primary.toString(), { method: 'GET' })
+      if (res.status === 404) {
+        const fallback = new URL('/api/v1/chat/history', apiBaseUrl)
+        fallback.searchParams.set('session_id', String(targetSessionId))
+        fallback.searchParams.set('limit', '50')
+        res = await authFetch(fallback.toString(), { method: 'GET' })
+      }
+
+      if (!res.ok) return
+
+      const data = (await res.json().catch(() => null)) as ChatHistoryItem[] | null
+      if (!Array.isArray(data)) return
+
+      setMessages(
+        data
+          .filter((item) => item && typeof item.content === 'string')
+          .map((item) => ({
+            id: String(item.id),
+            role: item.role === 'assistant' ? 'assistant' : 'user',
+            content: item.content,
+            timestamp: parseDate(item.created_at),
+          })),
+      )
+    },
+    [apiBaseUrl, authFetch],
+  )
+
+  useEffect(() => {
+    if (!apiBaseUrl) return
+    const loadDocuments = async () => {
+      try {
+        const url = new URL('/api/v1/documents', apiBaseUrl)
+        url.searchParams.set('skip', '0')
+        url.searchParams.set('limit', '100')
+        const res = await authFetch(url.toString(), { method: 'GET' })
+        if (!res.ok) return
+        const data = (await res
+          .json()
+          .catch(() => null)) as DocumentListResponse | null
+        if (!data?.items || !Array.isArray(data.items)) return
+        setDocuments(
+          data.items.map((doc) => ({
+            id: doc.id,
+            label: documentLabel(doc),
+          })),
+        )
+      } catch {
+        // Optional list for scope selector.
+      }
+    }
+    void loadDocuments()
+  }, [apiBaseUrl, authFetch])
+
   useEffect(() => {
     if (!apiBaseUrl) return
     if (shouldStartFresh || scopedDocumentId != null) return
@@ -304,39 +432,15 @@ export function RAGChat({
     const parsed = raw && /^\d+$/.test(raw) ? Number(raw) : null
     if (!parsed) return
 
-    setSessionId(parsed)
-
-    const loadHistory = async () => {
-      const url = new URL('/api/v1/chat/history', apiBaseUrl)
-      url.searchParams.set('session_id', String(parsed))
-      url.searchParams.set('limit', '50')
-
-      try {
-        const res = await authFetch(url.toString(), { method: 'GET' })
-        if (!res.ok) return
-
-        const data = (await res.json().catch(() => null)) as
-          | ChatHistoryItem[]
-          | null
-        if (!Array.isArray(data)) return
-
-        setMessages(
-          data
-            .filter((item) => item && typeof item.content === 'string')
-            .map((item) => ({
-              id: String(item.id),
-              role: item.role === 'assistant' ? 'assistant' : 'user',
-              content: item.content,
-              timestamp: parseDate(item.created_at),
-            })),
-        )
-      } catch {
-        // Ignore history loading failures and allow fresh chat.
-      }
-    }
-
-    void loadHistory()
-  }, [apiBaseUrl, authFetch, scopedDocumentId, shouldStartFresh])
+    persistSession(parsed)
+    void loadSessionMessages(parsed)
+  }, [
+    apiBaseUrl,
+    loadSessionMessages,
+    persistSession,
+    scopedDocumentId,
+    shouldStartFresh,
+  ])
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -345,11 +449,6 @@ export function RAGChat({
   }, [messages])
 
   useEffect(() => {
-    if (sources.length === 0) {
-      clearSlot('right')
-      return
-    }
-
     setSlot(
       'right',
       <RAGHeaderControls
@@ -357,13 +456,111 @@ export function RAGChat({
         isContextOpen={isContextOpen}
         onToggleContext={() => setIsContextOpen((v) => !v)}
         collections={RAG_COLLECTIONS}
+        documents={documents}
+        selectedDocumentId={selectedDocumentId}
+        onChangeSelectedDocumentId={setSelectedDocumentId}
         settings={settings}
         onChangeSettings={setSettings}
       />,
     )
 
     return () => clearSlot('right')
-  }, [clearSlot, isContextOpen, setSlot, settings, sources.length])
+  }, [
+    clearSlot,
+    documents,
+    isContextOpen,
+    selectedDocumentId,
+    setSlot,
+    settings,
+    sources.length,
+  ])
+
+  const streamViaWebSocket = useCallback(
+    async (question: string, ensuredSessionId: number) => {
+      if (!apiBaseUrl) throw new Error('Missing API base URL.')
+      if (typeof window === 'undefined' || typeof WebSocket === 'undefined') {
+        throw new Error('WebSocket is not available in this environment.')
+      }
+
+      const wsUrl = new URL('/api/v1/chat/ws', apiBaseUrl)
+      wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl.searchParams.set('session_id', String(ensuredSessionId))
+      wsUrl.searchParams.set('top_k', String(Math.max(1, Math.min(10, settings.topK))))
+      wsUrl.searchParams.set('use_mmr', String(settings.mode === 'hybrid'))
+      wsUrl.searchParams.set('mmr_lambda', '0.5')
+      wsUrl.searchParams.set('max_history_messages', '10')
+      if (settings.minScore > 0) {
+        wsUrl.searchParams.set('score_threshold', String(settings.minScore))
+      }
+      const token = getAccessToken()
+      if (token) {
+        wsUrl.searchParams.set('token', token)
+      }
+
+      return new Promise<string>((resolve, reject) => {
+        const socket = new WebSocket(wsUrl.toString())
+        let answer = ''
+        let done = false
+        let idleTimer: number | null = null
+        let hardTimeout: number | null = null
+
+        const finish = () => {
+          if (done) return
+          done = true
+          if (idleTimer != null) window.clearTimeout(idleTimer)
+          if (hardTimeout != null) window.clearTimeout(hardTimeout)
+          socket.close()
+          resolve(answer.trim())
+        }
+
+        const fail = (message: string) => {
+          if (done) return
+          done = true
+          if (idleTimer != null) window.clearTimeout(idleTimer)
+          if (hardTimeout != null) window.clearTimeout(hardTimeout)
+          socket.close()
+          reject(new Error(message))
+        }
+
+        const resetIdle = () => {
+          if (idleTimer != null) window.clearTimeout(idleTimer)
+          idleTimer = window.setTimeout(() => {
+            finish()
+          }, 900)
+        }
+
+        hardTimeout = window.setTimeout(() => {
+          if (answer.trim()) {
+            finish()
+            return
+          }
+          fail('WebSocket chat timed out.')
+        }, 30000)
+
+        socket.onopen = () => {
+          socket.send(question)
+        }
+        socket.onmessage = (event) => {
+          if (typeof event.data === 'string') {
+            answer += event.data
+            resetIdle()
+          }
+        }
+        socket.onerror = () => {
+          fail('WebSocket chat failed.')
+        }
+        socket.onclose = () => {
+          if (done) return
+          if (answer.trim()) {
+            finish()
+            return
+          }
+          fail('WebSocket chat closed without response.')
+        }
+      })
+    },
+    [apiBaseUrl, settings.minScore, settings.mode, settings.topK],
+  )
 
   const handleSend = async (content: string) => {
     if (!apiBaseUrl) {
@@ -384,27 +581,60 @@ export function RAGChat({
     setIsLoading(true)
 
     try {
+      const ensuredSessionId = sessionId ?? (await createSession())
+      if (!ensuredSessionId) {
+        throw new Error('Unable to create chat session.')
+      }
+
       const requestBody = {
         question: content,
-        session_id: sessionId ?? undefined,
+        session_id: ensuredSessionId,
         top_k: Math.max(1, Math.min(10, settings.topK)),
         score_threshold: settings.minScore,
         use_mmr: settings.mode === 'hybrid',
         filters:
-          scopedDocumentId != null
+          selectedDocumentId != null
             ? {
-                document_id: scopedDocumentId,
+                document_id: selectedDocumentId,
               }
             : undefined,
         stream: false,
       }
 
-      const url = new URL('/api/v1/chat/ask', apiBaseUrl)
-      const res = await authFetch(url.toString(), {
+      if (settings.stream && selectedDocumentId == null) {
+        try {
+          const streamedAnswer = await streamViaWebSocket(content, ensuredSessionId)
+          if (!streamedAnswer) throw new Error('No response from WebSocket stream.')
+
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `${Date.now()}-assistant`,
+              role: 'assistant',
+              content: streamedAnswer,
+              timestamp: new Date(),
+            },
+          ])
+          return
+        } catch {
+          // Fallback to HTTP JSON response path below.
+        }
+      }
+
+      const aliasUrl = new URL('/api/v1/chat', apiBaseUrl)
+      let res = await authFetch(aliasUrl.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
       })
+      if (res.status === 404) {
+        const askUrl = new URL('/api/v1/chat/ask', apiBaseUrl)
+        res = await authFetch(askUrl.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...requestBody, stream: false }),
+        })
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
@@ -424,11 +654,7 @@ export function RAGChat({
       }
 
       if (typeof data?.session_id === 'number') {
-        setSessionId(data.session_id)
-        localStorage.setItem('chat_session_id', String(data.session_id))
-        if (typeof data?.session_key === 'string' && data.session_key) {
-          localStorage.setItem('chat_session_key', data.session_key)
-        }
+        persistSession(data.session_id, data.session_key)
       }
 
       const nextSources = mapContextsToSources(data?.contexts)
@@ -490,17 +716,17 @@ export function RAGChat({
       >
         <ScrollArea className="flex-1" ref={scrollRef}>
           <div className="mx-auto max-w-4xl p-6">
-            {scopedDocumentId != null && (
+            {selectedDocumentId != null && (
               <div className="bg-muted/50 mb-4 flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                 <p className="text-muted-foreground">
-                  Scoped to <span className="text-foreground">Document #{scopedDocumentId}</span>
-                  {scopedCollectionId ? (
+                  Scoped to <span className="text-foreground">Document #{selectedDocumentId}</span>
+                  {settings.collectionId ? (
                     <>
                       {' '}
                       in{' '}
                       <span className="text-foreground">
-                        {RAG_COLLECTIONS.find((c) => c.id === scopedCollectionId)?.label ??
-                          scopedCollectionId}
+                        {RAG_COLLECTIONS.find((c) => c.id === settings.collectionId)?.label ??
+                          settings.collectionId}
                       </span>
                     </>
                   ) : null}
@@ -510,6 +736,7 @@ export function RAGChat({
                   variant="ghost"
                   size="sm"
                   onClick={() => {
+                    setSelectedDocumentId(null)
                     router.replace('/chat')
                   }}
                 >
