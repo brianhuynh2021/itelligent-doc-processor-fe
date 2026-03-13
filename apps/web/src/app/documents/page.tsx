@@ -351,6 +351,8 @@ export default function DocumentsPage() {
   const [fileIdByDocId, setFileIdByDocId] = useState<Record<number, string>>({})
   const [hasLoadedCollectionMap, setHasLoadedCollectionMap] = useState(false)
   const [hasLoadedFileMap, setHasLoadedFileMap] = useState(false)
+  const collectionByDocIdRef = useRef<Record<number, RAGCollectionId>>({})
+  const fileIdByDocIdRef = useRef<Record<number, string>>({})
 
   useEffect(() => {
     setSlot(
@@ -439,6 +441,14 @@ export default function DocumentsPage() {
     window.localStorage.setItem(FILE_ID_STORAGE_KEY, JSON.stringify(fileIdByDocId))
   }, [fileIdByDocId, hasLoadedFileMap])
 
+  useEffect(() => {
+    collectionByDocIdRef.current = collectionByDocId
+  }, [collectionByDocId])
+
+  useEffect(() => {
+    fileIdByDocIdRef.current = fileIdByDocId
+  }, [fileIdByDocId])
+
   const loadDocuments = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
       if (!silent) setIsLoadingDocs(true)
@@ -475,12 +485,12 @@ export default function DocumentsPage() {
         }
 
         const nextDocs = data.items.map((item) =>
-          mapDocumentToRow(item, collectionByDocId),
+          mapDocumentToRow(item, collectionByDocIdRef.current),
         )
         setDocs(nextDocs)
 
         const missingFileIds = nextDocs.some(
-          (item) => !fileIdByDocId[item.documentId],
+          (item) => !fileIdByDocIdRef.current[item.documentId],
         )
         if (missingFileIds) {
           try {
@@ -498,7 +508,8 @@ export default function DocumentsPage() {
                     const matchedDoc = nextDocs.find(
                       (doc) =>
                         doc.filePath === file.path ||
-                        (doc.name === file.filename && !fileIdByDocId[doc.documentId]),
+                        (doc.name === file.filename &&
+                          !fileIdByDocIdRef.current[doc.documentId]),
                     )
                     if (matchedDoc) {
                       acc[matchedDoc.documentId] = file.file_id
@@ -509,7 +520,18 @@ export default function DocumentsPage() {
                 )
 
                 if (Object.keys(fileIdPatch).length > 0) {
-                  setFileIdByDocId((prev) => ({ ...prev, ...fileIdPatch }))
+                  setFileIdByDocId((prev) => {
+                    let changed = false
+                    const next = { ...prev }
+                    for (const [documentId, fileId] of Object.entries(fileIdPatch)) {
+                      const numericId = Number(documentId)
+                      if (!Number.isFinite(numericId) || !fileId) continue
+                      if (next[numericId] === fileId) continue
+                      next[numericId] = fileId
+                      changed = true
+                    }
+                    return changed ? next : prev
+                  })
                 }
               }
             }
@@ -526,7 +548,7 @@ export default function DocumentsPage() {
         if (!silent) setIsLoadingDocs(false)
       }
     },
-    [apiBaseUrl, authFetch, collectionByDocId, fileIdByDocId],
+    [apiBaseUrl, authFetch],
   )
 
   useEffect(() => {
