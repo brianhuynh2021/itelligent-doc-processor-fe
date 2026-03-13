@@ -270,6 +270,10 @@ export function RAGChat({
     () => searchParams.get('new') === '1',
     [searchParams],
   )
+  const shouldResumeSession = useMemo(
+    () => searchParams.get('resume') === '1',
+    [searchParams],
+  )
 
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(
     scopedDocumentId,
@@ -326,6 +330,18 @@ export function RAGChat({
     window.localStorage.removeItem('chat_session_id')
     window.localStorage.removeItem('chat_session_key')
   }, [scopedCollectionId, scopedDocumentId, shouldStartFresh])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (shouldStartFresh || scopedDocumentId != null || shouldResumeSession) return
+
+    setMessages([])
+    setSources([])
+    setSelectedSource(null)
+    setSessionId(null)
+    window.localStorage.removeItem('chat_session_id')
+    window.localStorage.removeItem('chat_session_key')
+  }, [scopedDocumentId, shouldResumeSession, shouldStartFresh])
 
   useEffect(() => {
     if (getAccessToken()) return
@@ -544,7 +560,7 @@ export function RAGChat({
 
   useEffect(() => {
     if (!apiBaseUrl) return
-    if (shouldStartFresh || scopedDocumentId != null) return
+    if (shouldStartFresh || scopedDocumentId != null || !shouldResumeSession) return
 
     const raw = localStorage.getItem('chat_session_id')
     const parsed = raw && /^\d+$/.test(raw) ? Number(raw) : null
@@ -557,6 +573,7 @@ export function RAGChat({
     loadSessionMessages,
     persistSession,
     scopedDocumentId,
+    shouldResumeSession,
     shouldStartFresh,
   ])
 

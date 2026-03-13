@@ -3,15 +3,25 @@
 import { LoginForm } from "@/components/auth/LoginForm"
 import { AuthLayout } from "@/components/auth/AuthLayout"
 import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { refreshAuthUser, storeAuthTokens } from "@/lib/auth"
 
 export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
+  const searchParams = useSearchParams()
   const baseUrl =
     process.env.NEXT_PUBLIC_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
+
+  const redirectTarget = (() => {
+    const redirect = searchParams.get("redirect")
+    if (!redirect || !redirect.startsWith("/") || redirect.startsWith("//")) {
+      return "/documents"
+    }
+    if (redirect === "/login") return "/documents"
+    return redirect
+  })()
 
   const handleLogin = async (values: { email: string; password: string }) => {
     setIsLoading(true)
@@ -53,7 +63,7 @@ export default function LoginPage() {
       await refreshAuthUser()
 
       toast.success("Signed in successfully")
-      router.replace("/chat")
+      router.replace(redirectTarget)
       router.refresh()
     } catch (error) {
       console.error("Login error:", error)

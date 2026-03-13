@@ -95,14 +95,19 @@ export function Header({
   const { slots } = useHeaderSlots()
   const pathname = usePathname()
   const router = useRouter()
+  const [hasMounted, setHasMounted] = useState(false)
   const [derivedAuthState, setDerivedAuthState] =
-    useState<DerivedAuthState>(readDerivedAuthState)
+    useState<DerivedAuthState>(() => ({
+      isAuthenticated: Boolean(isAuthenticated),
+      user,
+    }))
 
   const syncAuthState = useCallback(() => {
     setDerivedAuthState(readDerivedAuthState())
   }, [])
 
   useEffect(() => {
+    setHasMounted(true)
     syncAuthState()
 
     window.addEventListener(AUTH_CHANGED_EVENT, syncAuthState)
@@ -138,9 +143,10 @@ export function Header({
     [onSignOut, router]
   )
 
-  const effectiveIsAuthenticated =
-    isAuthenticated ?? derivedAuthState.isAuthenticated
-  const effectiveUser = user ?? derivedAuthState.user
+  const effectiveIsAuthenticated = hasMounted
+    ? (isAuthenticated ?? derivedAuthState.isAuthenticated)
+    : Boolean(isAuthenticated)
+  const effectiveUser = hasMounted ? (user ?? derivedAuthState.user) : user
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/"

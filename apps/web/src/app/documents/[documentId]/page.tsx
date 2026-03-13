@@ -1,7 +1,7 @@
 "use client"
 
-import { use, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useParams, useRouter } from "next/navigation"
 import {
   ArrowLeft,
   Loader2,
@@ -119,12 +119,9 @@ function isTerminalStatus(document: DocumentInDB) {
   return false
 }
 
-export default function DocumentDetailPage({
-  params,
-}: {
-  params: Promise<{ documentId: string }>
-}) {
+export default function DocumentDetailPage() {
   const router = useRouter()
+  const params = useParams<{ documentId?: string }>()
   const pollIntervalRef = useRef<number | null>(null)
   const pollTicksRef = useRef(0)
 
@@ -147,12 +144,10 @@ export default function DocumentDetailPage({
     return baseUrl?.replace(/\/+$/, "") ?? ""
   }, [])
 
-  const resolvedParams = use(params)
-
   const documentId = useMemo(() => {
-    const parsed = Number(resolvedParams.documentId)
+    const parsed = Number(params.documentId)
     return Number.isFinite(parsed) ? parsed : null
-  }, [resolvedParams.documentId])
+  }, [params.documentId])
 
   const stopPolling = useCallback(() => {
     if (typeof window === "undefined") return
