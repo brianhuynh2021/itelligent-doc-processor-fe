@@ -96,10 +96,22 @@ type FileMetadataResponse = {
   url?: string | null
 }
 
+type FileListItem = {
+  file_id: string
+  filename: string
+  path: string
+}
+
+type FileListResponse = {
+  items: FileListItem[]
+  total: number
+}
+
 type RAGDocumentRow = {
   id: string
   documentId: number
   name: string
+  filePath: string
   type: 'PDF' | 'DOCX' | 'TXT' | 'XLSX' | 'CSV'
   sizeMb: number
   updatedAt: string
@@ -283,6 +295,7 @@ function mapDocumentToRow(
     id: String(doc.id),
     documentId: doc.id,
     name: doc.name || doc.original_filename,
+    filePath: doc.file_path,
     type: inferFileType(doc.content_type),
     sizeMb: doc.file_size / (1024 * 1024),
     updatedAt: updated.label,
@@ -461,9 +474,49 @@ export default function DocumentsPage() {
           throw new Error('Unexpected response from /documents endpoint.')
         }
 
-        setDocs(
-          data.items.map((item) => mapDocumentToRow(item, collectionByDocId)),
+        const nextDocs = data.items.map((item) =>
+          mapDocumentToRow(item, collectionByDocId),
         )
+        setDocs(nextDocs)
+
+        const missingFileIds = nextDocs.some(
+          (item) => !fileIdByDocId[item.documentId],
+        )
+        if (missingFileIds) {
+          try {
+            const filesUrl = new URL('/api/v1/files', apiBaseUrl)
+            filesUrl.searchParams.set('skip', '0')
+            filesUrl.searchParams.set('limit', '200')
+            const filesRes = await authFetch(filesUrl.toString(), { method: 'GET' })
+            if (filesRes.ok) {
+              const filesData = (await filesRes
+                .json()
+                .catch(() => null)) as FileListResponse | null
+              if (filesData?.items && Array.isArray(filesData.items)) {
+                const fileIdPatch = filesData.items.reduce<Record<number, string>>(
+                  (acc, file) => {
+                    const matchedDoc = nextDocs.find(
+                      (doc) =>
+                        doc.filePath === file.path ||
+                        (doc.name === file.filename && !fileIdByDocId[doc.documentId]),
+                    )
+                    if (matchedDoc) {
+                      acc[matchedDoc.documentId] = file.file_id
+                    }
+                    return acc
+                  },
+                  {},
+                )
+
+                if (Object.keys(fileIdPatch).length > 0) {
+                  setFileIdByDocId((prev) => ({ ...prev, ...fileIdPatch }))
+                }
+              }
+            }
+          } catch {
+            // Keep actions available for docs uploaded in this session even if file list lookup fails.
+          }
+        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'Failed to load documents.'
@@ -473,7 +526,7 @@ export default function DocumentsPage() {
         if (!silent) setIsLoadingDocs(false)
       }
     },
-    [apiBaseUrl, authFetch, collectionByDocId],
+    [apiBaseUrl, authFetch, collectionByDocId, fileIdByDocId],
   )
 
   useEffect(() => {
@@ -731,6 +784,49 @@ export default function DocumentsPage() {
       }
     },
     [apiBaseUrl, authFetch, getFileIdForDocument],
+  )
+
+  const deleteDocumentRecord = useCallback(
+    async (documentId: number) => {
+      if (!apiBaseUrl) {
+        toast.error(
+          'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
+        )
+        return
+      }
+
+      const confirmed = window.confirm(`Delete Document #${documentId}?`)
+      if (!confirmed) return
+
+      try {
+        const url = new URL(`/api/v1/documents/${documentId}`, apiBaseUrl)
+        const res = await authFetch(url.toString(), { method: 'DELETE' })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          const message =
+            body?.detail || body?.message || `Delete document failed (${res.status}).`
+          throw new Error(message)
+        }
+
+        setDocs((prev) => prev.filter((doc) => doc.documentId !== documentId))
+        setFileIdByDocId((prev) => {
+          const next = { ...prev }
+          delete next[documentId]
+          return next
+        })
+        setCollectionByDocId((prev) => {
+          const next = { ...prev }
+          delete next[documentId]
+          return next
+        })
+        toast.success(`Deleted Document #${documentId}.`)
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to delete document.'
+        toast.error(message)
+      }
+    },
+    [apiBaseUrl, authFetch],
   )
 
   const handleFileInputChange = async (
@@ -1312,18 +1408,23 @@ export default function DocumentsPage() {
                                 variant="outline"
                                 size="sm"
                                 className="gap-2"
-                                disabled={!getFileIdForDocument(doc.documentId)}
                                 title={
                                   getFileIdForDocument(doc.documentId)
                                     ? `Delete file ${getFileIdForDocument(doc.documentId)}`
-                                    : 'File ID is unavailable for this document.'
+                                    : `File already missing. Delete Document #${doc.documentId} instead.`
                                 }
                                 onClick={() => {
-                                  void deleteDocumentFile(doc.documentId)
+                                  if (getFileIdForDocument(doc.documentId)) {
+                                    void deleteDocumentFile(doc.documentId)
+                                    return
+                                  }
+                                  void deleteDocumentRecord(doc.documentId)
                                 }}
                               >
                                 <Trash2 className="h-4 w-4" />
-                                Delete file
+                                {getFileIdForDocument(doc.documentId)
+                                  ? 'Delete file'
+                                  : 'Delete document'}
                               </Button>
                               <Button size="sm" className="gap-2" asChild>
                                 <Link href={`/documents/${doc.documentId}`}>
