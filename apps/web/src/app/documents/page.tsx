@@ -829,7 +829,7 @@ export default function DocumentsPage() {
             <h1 className="text-3xl font-bold">Documents</h1>
             <p className="text-muted-foreground">
               Ingest, chunk, and index your files for Retrieval-Augmented
-              Generation.
+              Generation. Supported: PDF, DOCX, TXT, CSV, XLSX, PNG, JPEG.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

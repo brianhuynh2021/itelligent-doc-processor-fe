@@ -67,10 +67,24 @@ type DocumentListItem = {
   id: number
   name?: string | null
   original_filename?: string | null
+  status?: string | null
 }
 
 type DocumentListResponse = {
   items: DocumentListItem[]
+}
+
+type DocumentStatusResponse = {
+  id: number
+  status?: string | null
+}
+
+type DocumentIngestResponse = {
+  document?: {
+    id?: number
+    status?: string | null
+  }
+  chunks_indexed?: number
 }
 
 function toNumber(value: unknown): number | null {
@@ -194,6 +208,30 @@ function parseDate(value: string): Date {
   return date
 }
 
+function normalizeStatus(status: string | null | undefined): string {
+  return status?.trim().toLowerCase() ?? ''
+}
+
+function isDocumentIndexed(status: string | null | undefined): boolean {
+  const normalized = normalizeStatus(status)
+  return ['completed', 'done', 'success', 'processed', 'indexed'].includes(
+    normalized,
+  )
+}
+
+function isDocumentProcessing(status: string | null | undefined): boolean {
+  const normalized = normalizeStatus(status)
+  return [
+    'processing',
+    'in_progress',
+    'running',
+    'ocr',
+    'chunking',
+    'ingesting',
+    'embedding',
+  ].includes(normalized)
+}
+
 function documentLabel(doc: DocumentListItem): string {
   return (
     (typeof doc.name === 'string' && doc.name.trim()) ||
@@ -245,6 +283,9 @@ export function RAGChat({
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId, setSessionId] = useState<number | null>(null)
   const [documents, setDocuments] = useState<RAGDocumentOption[]>([])
+  const [documentStatusById, setDocumentStatusById] = useState<
+    Record<number, string>
+  >({})
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const scopeInitRef = useRef<string | null>(null)
@@ -254,7 +295,7 @@ export function RAGChat({
     collectionId: 'default',
     mode: 'semantic',
     topK: 8,
-    minScore: 0.3,
+    minScore: 0,
     includeCitations: true,
     stream: false,
   })
@@ -417,12 +458,89 @@ export function RAGChat({
             label: documentLabel(doc),
           })),
         )
+        setDocumentStatusById(
+          data.items.reduce<Record<number, string>>((acc, doc) => {
+            if (typeof doc.status === 'string' && doc.status.trim()) {
+              acc[doc.id] = doc.status
+            }
+            return acc
+          }, {}),
+        )
       } catch {
         // Optional list for scope selector.
       }
     }
     void loadDocuments()
   }, [apiBaseUrl, authFetch])
+
+  const ensureDocumentIndexedForChat = useCallback(
+    async (documentId: number) => {
+      if (!apiBaseUrl) {
+        throw new Error(
+          'Missing API base URL. Set NEXT_PUBLIC_BASE_URL and restart the dev server.',
+        )
+      }
+
+      const knownStatus = documentStatusById[documentId]
+      if (isDocumentIndexed(knownStatus)) return
+
+      const detailUrl = new URL(`/api/v1/documents/${documentId}`, apiBaseUrl)
+      const detailRes = await authFetch(detailUrl.toString(), { method: 'GET' })
+      if (!detailRes.ok) {
+        const body = await detailRes.json().catch(() => ({}))
+        const message =
+          body?.detail ||
+          body?.message ||
+          `Failed to fetch document status (${detailRes.status}).`
+        throw new Error(message)
+      }
+
+      const detail = (await detailRes
+        .json()
+        .catch(() => null)) as DocumentStatusResponse | null
+      const latestStatus = detail?.status ?? null
+      if (typeof latestStatus === 'string') {
+        setDocumentStatusById((prev) => ({ ...prev, [documentId]: latestStatus }))
+      }
+
+      if (isDocumentIndexed(latestStatus)) return
+      if (isDocumentProcessing(latestStatus)) {
+        throw new Error(
+          `Document #${documentId} đang xử lý (${latestStatus}). Hãy chờ ingest/index hoàn tất rồi thử lại.`,
+        )
+      }
+
+      toast.info(`Document #${documentId} chưa index, đang auto-ingest...`)
+      const ingestUrl = new URL(`/api/v1/documents/${documentId}/ingest`, apiBaseUrl)
+      const ingestRes = await authFetch(ingestUrl.toString(), { method: 'POST' })
+      if (!ingestRes.ok) {
+        const body = await ingestRes.json().catch(() => ({}))
+        const message =
+          body?.detail ||
+          body?.message ||
+          `Ingest failed for Document #${documentId} (${ingestRes.status}).`
+        throw new Error(message)
+      }
+
+      const ingestData = (await ingestRes
+        .json()
+        .catch(() => null)) as DocumentIngestResponse | null
+      const statusAfterIngest = ingestData?.document?.status ?? 'completed'
+      setDocumentStatusById((prev) => ({
+        ...prev,
+        [documentId]: statusAfterIngest,
+      }))
+
+      if (!isDocumentIndexed(statusAfterIngest)) {
+        throw new Error(
+          `Document #${documentId} ingest xong nhưng trạng thái vẫn là "${statusAfterIngest}".`,
+        )
+      }
+
+      toast.success(`Document #${documentId} đã ingest xong, đang truy vấn lại.`)
+    },
+    [apiBaseUrl, authFetch, documentStatusById],
+  )
 
   useEffect(() => {
     if (!apiBaseUrl) return
@@ -581,16 +699,23 @@ export function RAGChat({
     setIsLoading(true)
 
     try {
+      if (selectedDocumentId != null) {
+        await ensureDocumentIndexedForChat(selectedDocumentId)
+      }
+
       const ensuredSessionId = sessionId ?? (await createSession())
       if (!ensuredSessionId) {
         throw new Error('Unable to create chat session.')
       }
 
+      const scoreThreshold =
+        settings.minScore > 0 ? settings.minScore : undefined
+
       const requestBody = {
         question: content,
         session_id: ensuredSessionId,
         top_k: Math.max(1, Math.min(10, settings.topK)),
-        score_threshold: settings.minScore,
+        score_threshold: scoreThreshold,
         use_mmr: settings.mode === 'hybrid',
         filters:
           selectedDocumentId != null
@@ -660,6 +785,12 @@ export function RAGChat({
       const nextSources = mapContextsToSources(data?.contexts)
       setSources(nextSources)
       setSelectedSource((prev) => prev ?? nextSources[0] ?? null)
+
+      if (selectedDocumentId != null && nextSources.length === 0) {
+        toast.warning(
+          `Document #${selectedDocumentId} chưa có ngữ cảnh truy xuất được. Hãy kiểm tra ingest/index hoặc giảm Min score.`,
+        )
+      }
 
       const assistantMessage: Message = {
         id: `${Date.now()}-assistant`,
