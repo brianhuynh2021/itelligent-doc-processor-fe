@@ -2,12 +2,12 @@
 
 import { LoginForm } from "@/components/auth/LoginForm"
 import { AuthLayout } from "@/components/auth/AuthLayout"
-import { useState } from "react"
+import { Suspense, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { refreshAuthUser, storeAuthTokens } from "@/lib/auth"
 
-export default function LoginPage() {
+function LoginContent() {
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -92,5 +92,13 @@ export default function LoginPage() {
         isLoading={isLoading}
       />
     </AuthLayout>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginContent />
+    </Suspense>
   )
 }

@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import {
   Activity,
   Clock,
+  Download,
   FileText,
   Loader2,
   MessageSquare,
@@ -21,8 +22,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { BarChart, DonutChart, type ChartDatum } from "@/components/ui/charts"
 import { ErrorDisplay } from "@/components/ui/ErrorDisplay"
 import { LoadingSkeleton } from "@/components/ui/LoadingSkeleton"
+import { downloadTextFile, toCsv } from "@/lib/api"
 import { clearAuthTokens, getAccessToken, refreshAccessToken } from "@/lib/auth"
 
 type DocumentsStatsResponse = {
@@ -414,6 +417,54 @@ export default function AdminDashboardPage() {
     return normalizeStatusCounts(docsStats?.by_status ?? {})
   }, [docsStats])
 
+  const statusChartData = useMemo<ChartDatum[]>(
+    () => [
+      { label: "Completed", value: statusCounts.completed, colorIndex: 1 },
+      { label: "Processing", value: statusCounts.processing, colorIndex: 4 },
+      { label: "Pending", value: statusCounts.pending, colorIndex: 2 },
+      { label: "Error", value: statusCounts.error, colorIndex: 0 },
+    ],
+    [statusCounts],
+  )
+
+  const contentTypeChartData = useMemo<ChartDatum[]>(() => {
+    const entries = Object.entries(docsStats?.by_content_type ?? {})
+    return entries
+      .map(([label, value]) => ({
+        label: label.split("/").pop() ?? label,
+        value,
+      }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 6)
+  }, [docsStats])
+
+  const exportSessionsCsv = useCallback(() => {
+    if (sessions.length === 0) {
+      toast.error("No sessions to export.")
+      return
+    }
+    const rows = sessions.map((s) => ({
+      id: s.id,
+      session_key: s.session_key,
+      name: s.name ?? "",
+      created_by_user_id: s.created_by_user_id ?? "",
+      created_at: s.created_at,
+      updated_at: s.updated_at,
+    }))
+    const stamp = new Date().toISOString().slice(0, 10)
+    downloadTextFile(
+      `chat-sessions-${stamp}.csv`,
+      toCsv(rows, [
+        "id",
+        "session_key",
+        "name",
+        "created_by_user_id",
+        "created_at",
+        "updated_at",
+      ]),
+    )
+  }, [sessions])
+
   return (
     <AdminLayout>
       <div className="space-y-6">
@@ -541,6 +592,40 @@ export default function AdminDashboardPage() {
           </div>
         ) : null}
 
+        {/* Document distribution charts */}
+        {!isLoading && docsStats ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Document status</CardTitle>
+                <CardDescription>Distribution across the pipeline</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <DonutChart
+                  data={statusChartData}
+                  centervalue={docsStats.total.toLocaleString()}
+                  centerLabel="documents"
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>By content type</CardTitle>
+                <CardDescription>Top file types ingested</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {contentTypeChartData.length ? (
+                  <BarChart data={contentTypeChartData} />
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No content-type breakdown available.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
+
         {/* Charts and Activity */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
           <Card className="col-span-4">
@@ -604,11 +689,23 @@ export default function AdminDashboardPage() {
           </Card>
 
           <Card className="col-span-3">
-            <CardHeader>
-              <CardTitle>Recent chat sessions</CardTitle>
-              <CardDescription>
-                Optional: /admin/chat/sessions?limit=20
-              </CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between space-y-0">
+              <div className="space-y-1.5">
+                <CardTitle>Recent chat sessions</CardTitle>
+                <CardDescription>
+                  Optional: /admin/chat/sessions?limit=20
+                </CardDescription>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={exportSessionsCsv}
+                disabled={sessions.length === 0}
+              >
+                <Download className="h-4 w-4" />
+                CSV
+              </Button>
             </CardHeader>
             <CardContent>
               {sessionsWarning ? (

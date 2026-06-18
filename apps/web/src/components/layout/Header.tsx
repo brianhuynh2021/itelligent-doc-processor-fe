@@ -96,11 +96,12 @@ export function Header({
   const pathname = usePathname()
   const router = useRouter()
   const [hasMounted, setHasMounted] = useState(false)
-  const [derivedAuthState, setDerivedAuthState] =
-    useState<DerivedAuthState>(() => ({
-      isAuthenticated: Boolean(isAuthenticated),
-      user,
-    }))
+  const [derivedAuthState, setDerivedAuthState] = useState<DerivedAuthState>(
+    () =>
+      user
+        ? { isAuthenticated: Boolean(isAuthenticated), user }
+        : { isAuthenticated: Boolean(isAuthenticated) },
+  )
 
   const syncAuthState = useCallback(() => {
     setDerivedAuthState(readDerivedAuthState())
